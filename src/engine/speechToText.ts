@@ -42,56 +42,102 @@ export interface STTProgress {
   message?: string;
 }
 
-const MODEL_ID = 'Xenova/whisper-tiny.en';
+/**
+ * Whisper model variants we expose in the UI.
+ *  - 'en'   : English-only (fastest, ~150 MB fp32)
+ *  - 'multi': 99-language model (auto-detects + transcribes; ~290 MB fp32)
+ */
+export type WhisperModelKind = 'en' | 'multi';
+
+export interface TranscribeOptions {
+  /** Optional [start, end] window in seconds. */
+  trim?: { start?: number; end?: number };
+  /** Model to use — default 'en'. */
+  model?: WhisperModelKind;
+  /**
+   * Spoken language hint for the multilingual model. ISO-639-1 like 'en',
+   * 'es', 'hi'… or 'auto' to let Whisper detect. Ignored for the en-only
+   * model.
+   */
+  language?: string;
+  onProgress?: (p: STTProgress) => void;
+}
+
+const MODEL_IDS: Record<WhisperModelKind, string> = {
+  // Newer, transformers.js v3-native ports avoid the qdq / SimplifiedLayerNorm
+  // bugs that the original `Xenova/*` exports trigger on current Chromium.
+  en: 'onnx-community/whisper-tiny.en',
+  multi: 'onnx-community/whisper-base'
+};
 const TARGET_SAMPLE_RATE = 16000; // Whisper expects 16 kHz mono float32
 
-// Module-level singleton. Building the pipeline downloads weights and
-// instantiates the runtime — we want that to happen exactly once.
-// Type left as `unknown` here because the SDK is dynamic-imported below
-// (so it ends up in its own Vite chunk).
-let pipelinePromise: Promise<unknown> | null = null;
+// Module-level cache. We key by model kind so switching between en-only
+// and multilingual loads cleanly without colliding. The runtime + WASM
+// shards download exactly once per kind and are reused thereafter.
+const pipelineCache = new Map<WhisperModelKind, Promise<unknown>>();
 
 async function getPipeline(
+  kind: WhisperModelKind,
   onProgress?: (p: STTProgress) => void
 ): Promise<(input: Float32Array, opts: object) => Promise<unknown>> {
-  if (!pipelinePromise) {
-    pipelinePromise = (async () => {
+  if (!pipelineCache.has(kind)) {
+    const p = (async () => {
       onProgress?.({ stage: 'load-model', message: 'Loading Whisper model\u2026' });
       // Dynamic import keeps transformers.js + ONNX runtime out of the main bundle.
       const { pipeline, env } = await import('@huggingface/transformers');
 
-      // Force CDN downloads (defaults are fine, but be explicit so cached
-      // partial-failures from earlier sessions can be re-fetched cleanly).
       env.allowLocalModels = false;
 
       // -------------------------------------------------------------------
-      // dtype selection notes
+      // dtype + device strategy (battle-tested order)
       // -------------------------------------------------------------------
-      // The default Whisper q4 quantization triggers this ORT bug:
-      //   "qdq_actions.cc:137 TransposeDQWeightsForMatMulNBits
-      //    Missing required scale: ... weight_merged_0_scale"
-      // on many Chromium builds. The flat-string dtype form (e.g. 'q8') gets
-      // silently downgraded to q4 for sub-models that lack a q8 variant on
-      // the HuggingFace Hub — which is exactly what bit us. The merged
-      // decoder for whisper-tiny.en only ships in q4 / q4f16 / fp16 / fp32,
-      // so we MUST use the per-submodel object form to force a non-q4
-      // variant on `decoder_model_merged`.
+      // We learned the hard way that on current Chromium ORT-Web:
+      //   * `Xenova/whisper-tiny.en` + q4/q8 trips
+      //     "qdq_actions.cc Missing required scale".
+      //   * fp16 encoder trips "SimplifiedLayerNormFusion ...
+      //     InsertedPrecisionFreeCast".
+      //   * WebGPU on Windows ignores `powerPreference` (crbug 369219127)
+      //     and silently picks the integrated GPU, which then OOMs on
+      //     whisper-base. The first transcribe "succeeds" but inference
+      //     races and the next call fails forever from a poisoned cache.
       //
-      // Try the smaller fp16 split first (encoder fp16 ≈ 30MB, decoder fp32
-      // ≈ 110MB). If that combo fails for any reason, fall back to full
-      // fp32 across the board (most reliable, ~160MB).
-      type DtypeMap = {
-        encoder_model: 'fp16' | 'fp32';
-        decoder_model_merged: 'fp16' | 'fp32';
+      // The reliable combo is:
+      //   1. `wasm + q8`   — small (~40 MB tiny.en, ~120 MB base) and fast
+      //   2. `wasm + fp32` — biggest, slowest, but the most stable on bugs
+      //
+      // We expose WebGPU as a third *non-Windows* attempt because on macOS
+      // / Linux it's a 3-5× speedup with no platform regression.
+      type Attempt = {
+        device: 'webgpu' | 'wasm';
+        dtype: 'q8' | 'fp32';
+        label: string;
       };
-      const dtypeAttempts: Array<DtypeMap | 'fp32'> = [
-        { encoder_model: 'fp16', decoder_model_merged: 'fp32' },
-        'fp32'
+
+      const isWindows =
+        typeof navigator !== 'undefined' &&
+        /Windows/i.test(navigator.userAgent || '');
+      const hasWebGPU =
+        typeof navigator !== 'undefined' &&
+        'gpu' in navigator &&
+        (navigator as Navigator & { gpu?: unknown }).gpu != null;
+
+      const attempts: Attempt[] = [
+        { device: 'wasm', dtype: 'q8', label: 'wasm/int8 (fast, small)' },
+        { device: 'wasm', dtype: 'fp32', label: 'wasm/fp32 (full precision)' }
       ];
+      if (hasWebGPU && !isWindows) {
+        // WebGPU only on non-Windows where powerPreference is honoured.
+        attempts.unshift({
+          device: 'webgpu',
+          dtype: 'fp32',
+          label: 'webgpu/fp32 (GPU accelerated)'
+        });
+      }
 
       const progressForward = (data: unknown) => {
         const d = data as {
           status?: string;
+          file?: string;
           loaded?: number;
           total?: number;
           progress?: number;
@@ -101,7 +147,10 @@ async function getPipeline(
             stage: 'load-model',
             progress: (d.loaded ?? 0) / d.total,
             loaded: d.loaded,
-            total: d.total
+            total: d.total,
+            message: d.file
+              ? `Downloading ${d.file} (${((d.loaded ?? 0) / 1048576).toFixed(1)} / ${(d.total / 1048576).toFixed(1)} MB)`
+              : undefined
           });
         } else if (d.status === 'ready' || d.status === 'done') {
           onProgress?.({ stage: 'load-model', progress: 1 });
@@ -109,42 +158,50 @@ async function getPipeline(
       };
 
       let lastErr: unknown = null;
-      for (let i = 0; i < dtypeAttempts.length; i++) {
-        const dtype = dtypeAttempts[i];
+      for (let i = 0; i < attempts.length; i++) {
+        const a = attempts[i];
+        onProgress?.({
+          stage: 'load-model',
+          message: `Trying ${a.label}\u2026`
+        });
         try {
-          const pipe = await pipeline('automatic-speech-recognition', MODEL_ID, {
-            dtype,
-            progress_callback: progressForward
-          });
+          // eslint-disable-next-line no-console
+          console.info(`[speechToText] Attempt ${i + 1}/${attempts.length}: ${a.label} on ${MODEL_IDS[kind]}`);
+          const pipe = await pipeline(
+            'automatic-speech-recognition',
+            MODEL_IDS[kind],
+            {
+              dtype: a.dtype,
+              device: a.device,
+              progress_callback: progressForward
+            }
+          );
+          // eslint-disable-next-line no-console
+          console.info(`[speechToText] \u2713 Loaded ${a.label}`);
           return pipe;
         } catch (err) {
           lastErr = err;
-          // ONNX session-creation failures throw with strings containing
-          // "Can't create a session" or "qdq_actions". Only retry on those —
-          // network/permission errors should fail fast.
           const msg = String((err as Error)?.message ?? err);
-          const retryable =
-            /create a session|qdq_actions|MatMulNBits|missing required scale|protobuf parsing failed|model load failed/i.test(
-              msg
-            );
-          if (!retryable || i === dtypeAttempts.length - 1) throw err;
-          const dtypeLabel =
-            typeof dtype === 'string' ? dtype : JSON.stringify(dtype);
+          const isLast = i === attempts.length - 1;
           // eslint-disable-next-line no-console
           console.warn(
-            `[speechToText] Whisper load failed with dtype ${dtypeLabel} — retrying with full fp32. (${msg.slice(0, 160)})`
+            `[speechToText] ${a.label} failed${isLast ? '' : ' \u2014 falling back'}. (${msg.slice(0, 200)})`
           );
+          if (isLast) {
+            // Throw a friendly composite error instead of the raw ORT one.
+            throw new Error(
+              `Whisper failed to load on every backend. Last error: ${msg.slice(0, 240)}`
+            );
+          }
         }
       }
-      // Should be unreachable — the loop either returns or throws.
       throw lastErr ?? new Error('Whisper pipeline failed to load.');
     })();
+    pipelineCache.set(kind, p);
     // If the load fails, drop the cached promise so the next attempt retries.
-    pipelinePromise.catch(() => {
-      pipelinePromise = null;
-    });
+    p.catch(() => pipelineCache.delete(kind));
   }
-  return (await pipelinePromise) as (
+  return (await pipelineCache.get(kind)!) as (
     input: Float32Array,
     opts: object
   ) => Promise<unknown>;
@@ -159,7 +216,7 @@ async function getPipeline(
  * "Clear cache & retry" button so users can recover without DevTools.
  */
 export async function clearWhisperCache(): Promise<void> {
-  pipelinePromise = null;
+  pipelineCache.clear();
   if (typeof indexedDB === 'undefined') return;
   // The library uses a Cache Storage entry named 'transformers-cache'.
   // We also kill any IndexedDB databases that look related, just in case.
@@ -235,22 +292,16 @@ async function decodeTo16kMono(src: string): Promise<{ samples: Float32Array; du
 /**
  * Transcribe an audio file with word-level timestamps.
  *
- * @param src         Audio source URL (data:, blob:, or http(s):)
- * @param trim        Optional [start, end] window in seconds. Only audio in
- *                    this window is sent to Whisper, which is much faster
- *                    for long files and prevents transcribing material the
- *                    user has trimmed out. Word timestamps in the result
- *                    are still expressed in audio-file time (i.e. shifted
- *                    by `trim.start`) so callers can keep treating them as
- *                    absolute.
- * @param onProgress  Optional UI progress hook
+ * Accepts a single options object so callers can mix model + trim + language
+ * + progress freely without positional argument soup.
  */
 export async function transcribeAudio(
   src: string,
-  trim?: { start?: number; end?: number },
-  onProgress?: (p: STTProgress) => void
+  options: TranscribeOptions = {}
 ): Promise<STTResult> {
   if (!src) throw new Error('No audio source provided.');
+
+  const { trim, model = 'en', language = 'auto', onProgress } = options;
 
   onProgress?.({ stage: 'decode-audio', message: 'Decoding audio\u2026' });
   const { samples, duration } = await decodeTo16kMono(src);
@@ -275,16 +326,26 @@ export async function transcribeAudio(
     }
   }
 
-  const pipe = await getPipeline(onProgress);
+  const pipe = await getPipeline(model, onProgress);
 
   onProgress?.({ stage: 'transcribe', message: 'Transcribing\u2026' });
   // `return_timestamps: 'word'` gives us per-word [start, end] timestamps.
   // chunk_length_s + stride_length_s let Whisper handle long audio (>30s).
-  const out = (await pipe(workingSamples, {
+  // For the multilingual model we also honour a language hint (or 'auto'
+  // which lets Whisper detect from the first chunk).
+  const callOpts: Record<string, unknown> = {
     return_timestamps: 'word',
     chunk_length_s: 30,
     stride_length_s: 5
-  })) as { text: string; chunks?: { text: string; timestamp: [number, number | null] }[] };
+  };
+  if (model === 'multi') {
+    if (language && language !== 'auto') callOpts.language = language;
+    callOpts.task = 'transcribe';
+  }
+  const out = (await pipe(workingSamples, callOpts)) as {
+    text: string;
+    chunks?: { text: string; timestamp: [number, number | null] }[];
+  };
 
   const chunks = out.chunks ?? [];
   const words: STTWord[] = [];
@@ -306,7 +367,7 @@ export async function transcribeAudio(
   return {
     text: (out.text ?? '').trim(),
     words,
-    language: 'en',
+    language: model === 'en' ? 'en' : language || 'auto',
     duration: workingDuration
   };
 }

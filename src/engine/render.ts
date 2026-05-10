@@ -13,6 +13,8 @@ import { pickEffectForPrompt } from './effectPicker';
 import { pickCaptionStyle, type CaptionStyleAuto } from './captionAi';
 import { distributeRevealTimes } from './audioAnalyzer';
 import { loadImageCached } from './imageCache';
+import { getPreset } from './captionPresets';
+import { filterFillerWords } from './captionText';
 
 export interface LoadedClip extends ImageClip {
   image: HTMLImageElement;
@@ -1160,18 +1162,59 @@ function drawProjectScript(
   base: ProjectState['captionStyle'],
   audioPeaks?: number[]
 ) {
-  const text = script.text.trim();
-  if (!text || totalDur <= 0) return;
-  const words = text.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return;
+  const rawText = script.text.trim();
+  if (!rawText || totalDur <= 0) return;
 
-  // Pick visual style from a synthetic prompt = the script itself, so
-  // 'auto' picks an animation/font/color that fits the content's mood.
+  // ---------- Filler/profanity filter ----------
+  // Apply BEFORE picking the visible window so filler words don't reserve
+  // slots. Word timestamps stay anchored to the surviving words' real
+  // spoken times (we never back-fill gaps — that would push captions out
+  // of sync with the underlying speech).
+  const filtered = filterFillerWords(
+    rawText,
+    script.wordTimes,
+    script.wordEnds,
+    !!script.filterFillers,
+    script.customFillers ?? []
+  );
+  const text = filtered.text;
+  const words = filtered.words;
+  if (words.length === 0) return;
+  const filteredWordTimes =
+    filtered.wordTimes.length === words.length ? filtered.wordTimes : undefined;
+  const filteredWordEnds =
+    filtered.wordEnds.length === words.length ? filtered.wordEnds : undefined;
+
+  // ---------- Style: preset > AI auto > user-picked animation ----------
+  const preset = getPreset(script.preset);
   const aiPick = pickCaptionStyle(text, script.styleSeed || 1);
-  const style: CaptionStyleAuto =
-    script.animation === 'auto'
-      ? aiPick
-      : { ...aiPick, animation: script.animation };
+  let style: CaptionStyleAuto;
+  if (preset) {
+    style = {
+      animation:
+        script.animation !== 'auto'
+          ? script.animation
+          : preset.style.animation === 'auto'
+            ? aiPick.animation
+            : preset.style.animation,
+      color: preset.style.fillColor,
+      stroke: preset.style.strokeColor,
+      accent: preset.style.glow,
+      fontFamily: preset.style.fontFamily,
+      fontWeight: preset.style.fontWeight,
+      sizeMul: preset.style.sizeMul,
+      tracking: preset.style.letterSpacing ?? 1
+    };
+  } else {
+    style =
+      script.animation === 'auto'
+        ? aiPick
+        : { ...aiPick, animation: script.animation };
+  }
+  const uppercase = preset?.style.uppercase ?? false;
+  const presetPill = preset?.style.pill ?? null;
+  const presetStrokeWidth = preset?.style.strokeWidth;
+  const karaoke = !!script.karaoke;
 
   // ---------- Reveal schedule ----------
   // We compute the *start time* of each word. Word stays on screen until
@@ -1183,7 +1226,10 @@ function drawProjectScript(
   //   2. 'audio'      — align word reveals to detected onset peaks (rough
   //      rhythm; works without STT).
   //   3. 'even'       — fallback, distribute words evenly across the timeline.
-  const wt = script.wordTimes;
+  // We use the *filtered* word times so reveals stay in sync after
+  // dropping fillers.
+  const wt = filteredWordTimes;
+  const wEnds = filteredWordEnds;
   const useTranscript =
     script.syncMode === 'transcript' &&
     Array.isArray(wt) &&
@@ -1227,7 +1273,10 @@ function drawProjectScript(
 
   // Wrap visible words to fit the safe width. Shrink size if needed.
   let lines: WrappedLine[] = [];
-  const phraseWords = visible.map((v) => words[v.idx]);
+  const phraseWords = visible.map((v) => {
+    const w = words[v.idx];
+    return uppercase ? w.toUpperCase() : w;
+  });
   for (let attempt = 0; attempt < 5; attempt++) {
     ctx.font = `${style.fontWeight} ${size}px ${style.fontFamily}`;
     lines = wrapWords(ctx, phraseWords.join(' '), safeWidth);
@@ -1273,14 +1322,85 @@ function drawProjectScript(
 
   // Render each visible word with its entrance + a fade trail for older words.
   ctx.save();
+
+  // Optional pill background (TikTok-style). Drawn behind text so it sits
+  // under all the words.
+  if (presetPill) {
+    ctx.save();
+    const padX = Math.round(size * 0.45);
+    const padY = Math.round(size * 0.18);
+    for (let li = 0; li < lines.length; li++) {
+      const lineY = blockTop + li * lineHeight + lineHeight / 2;
+      const w = lines[li].width;
+      ctx.fillStyle = presetPill;
+      const x = W / 2 - w / 2 - padX;
+      const y = lineY - lineHeight / 2 - padY * 0.3;
+      const ww = w + padX * 2;
+      const hh = lineHeight + padY;
+      const r = Math.min(hh / 2, 24);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + ww, y, x + ww, y + hh, r);
+      ctx.arcTo(x + ww, y + hh, x, y + hh, r);
+      ctx.arcTo(x, y + hh, x, y, r);
+      ctx.arcTo(x, y, x + ww, y, r);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Karaoke: figure out which visible word is currently being spoken (so we
+  // can highlight it). A word is "current" while t is between its start and
+  // its end (or up to the next word's start when end is unknown).
+  let karaokeActiveVisIdx = -1;
+  if (karaoke) {
+    for (let i = visible.length - 1; i >= 0; i--) {
+      const v = visible[i];
+      const wStart = starts[v.idx];
+      const wEnd =
+        wEnds && wEnds.length === words.length
+          ? wEnds[v.idx]
+          : v.idx + 1 < starts.length
+            ? starts[v.idx + 1]
+            : wStart + 0.4;
+      if (t >= wStart && t < wEnd + 0.05) {
+        karaokeActiveVisIdx = i;
+        break;
+      }
+    }
+    // No active match (silence between words) — highlight the most recently
+    // started word instead so the eye has a focal point.
+    if (karaokeActiveVisIdx === -1) karaokeActiveVisIdx = visible.length - 1;
+  }
+
   for (const pos of positions) {
     const v = visible[pos.visIdx];
     if (!v) continue;
     // Older words fade slightly so the *current* word visually pops more.
     const ageFromCurrent = visible.length - 1 - pos.visIdx;
-    const ageAlpha = Math.max(0.45, 1 - ageFromCurrent * 0.12);
+    const isActive = karaoke && pos.visIdx === karaokeActiveVisIdx;
+    let ageAlpha = Math.max(0.45, 1 - ageFromCurrent * 0.12);
+    if (karaoke && !isActive) ageAlpha *= 0.55; // dim non-active words harder
+
     ctx.save();
     ctx.globalAlpha = ageAlpha;
+
+    if (isActive) {
+      // Glow + slight scale for the karaoke-active word.
+      ctx.save();
+      ctx.shadowColor = style.accent;
+      ctx.shadowBlur = Math.round(size * 0.55);
+      ctx.translate(pos.x, pos.y);
+      ctx.scale(1.08, 1.08);
+      ctx.translate(-pos.x, -pos.y);
+    }
+
+    // Override stroke width when a preset asked for one.
+    if (presetStrokeWidth != null) {
+      ctx.lineWidth = presetStrokeWidth;
+    }
+
     drawAnimatedWord(
       ctx,
       pos.word,
@@ -1292,6 +1412,8 @@ function drawProjectScript(
       v.idx,
       style
     );
+
+    if (isActive) ctx.restore();
     ctx.restore();
   }
   ctx.restore();
@@ -1376,8 +1498,14 @@ export function renderFrame(rc: RenderContext, t: number): void {
   // Caption layer. Project-level script (if set) wins because the user has
   // explicitly written a single transcript that spans all clips. Per-clip
   // captions still work for the legacy / mixed flow.
+  //
+  // `script.burnIn === false` means the user wants captions exported as a
+  // sidecar .srt instead of pixel-burned, so we skip the draw entirely. The
+  // toggle defaults to `true` (and `undefined` is treated as `true`) so old
+  // projects keep their burned captions.
   const scriptText = project.script?.text?.trim();
-  if (project.captionsEnabled && scriptText) {
+  const burnIn = project.script?.burnIn !== false;
+  if (project.captionsEnabled && scriptText && burnIn) {
     const dur = rc.totalDur ?? totalDuration(project.clips);
     drawProjectScript(
       ctx,
@@ -1389,7 +1517,7 @@ export function renderFrame(rc: RenderContext, t: number): void {
       project.captionStyle,
       audioPeaks
     );
-  } else if (clip.caption) {
+  } else if (clip.caption && burnIn) {
     if (project.captionsEnabled) {
       drawAnimatedCaption(ctx, W, H, clip, local, clip.duration, project.captionStyle);
     } else {

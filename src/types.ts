@@ -172,6 +172,42 @@ export interface ProjectScript {
    * extra-fast utterances so reveal animations don't overlap awkwardly.
    */
   wordEnds?: number[];
+  /**
+   * Whisper model to use when transcribing. 'en' (English-only, fast) or
+   * 'multi' (99-language). Stored on the project so re-transcribes use the
+   * same model the user picked last time.
+   */
+  sttModel?: 'en' | 'multi';
+  /**
+   * Spoken language hint for the multilingual model. ISO-639-1 code or
+   * 'auto' to detect.
+   */
+  sttLanguage?: string;
+  /**
+   * Karaoke highlight on the currently-spoken word. Off by default — when
+   * on, the active word gets a glow + slight scale and surrounding words
+   * dim, like TikTok / Reels live captions.
+   */
+  karaoke?: boolean;
+  /**
+   * Visual preset key. Overrides the AI style picker when set. See
+   * CAPTION_PRESETS in `src/engine/captionPresets.ts`.
+   */
+  preset?: string;
+  /**
+   * Drop common filler words (uh, um, like, you-know\u2026) from the rendered
+   * captions. Word timings are re-paced so the remaining words still align
+   * with the underlying audio.
+   */
+  filterFillers?: boolean;
+  /** Custom additional words to drop alongside the built-in filler list. */
+  customFillers?: string[];
+  /**
+   * Burn captions into the video pixels (default true). When false, the
+   * exporter skips drawing captions on the canvas and instead writes a
+   * sidecar .srt / .vtt file alongside the .webm download.
+   */
+  burnIn?: boolean;
 }
 
 export interface ProjectState {

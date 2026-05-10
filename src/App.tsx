@@ -25,11 +25,13 @@ import { newEffectSeed } from './engine/effectPicker';
 import { newCaptionSeed } from './engine/captionAi';
 import { analyzeAudio, invalidateAudioAnalysis } from './engine/audioAnalyzer';
 import { transcribeAudio, clearWhisperCache, type STTProgress } from './engine/speechToText';
+import { filterFillerWords, buildCues, cuesToSRT } from './engine/captionText';
 import { PreviewCanvas } from './components/PreviewCanvas';
 import { MediaPanel } from './components/MediaPanel';
 import { Timeline } from './components/Timeline';
 import { AudioPanel } from './components/AudioPanel';
 import { ScriptPanel } from './components/ScriptPanel';
+import { TranscriptEditorDialog } from './components/TranscriptEditorDialog';
 import { ExportButton } from './components/ExportButton';
 import { DropZone } from './components/DropZone';
 import { ToastProvider, useToast } from './components/Toast';
@@ -378,11 +380,12 @@ function AppInner() {
       // files and stops Whisper from picking up speech the user cut.
       const trimStart = project.audio.start;
       const trimEnd = project.audio.end ?? project.audio.duration ?? undefined;
-      const result = await transcribeAudio(
-        src,
-        { start: trimStart, end: trimEnd ?? undefined },
-        (p) => setTranscribeProgress(p)
-      );
+      const result = await transcribeAudio(src, {
+        trim: { start: trimStart, end: trimEnd ?? undefined },
+        model: project.script.sttModel ?? 'en',
+        language: project.script.sttLanguage ?? 'auto',
+        onProgress: (p) => setTranscribeProgress(p)
+      });
       // Map words into project time. Drop anything outside the trim window.
       const startCut = project.audio.start;
       const endCut = project.audio.end ?? Infinity;
@@ -421,7 +424,14 @@ function AppInner() {
       setTranscribing(false);
       setTranscribeProgress(null);
     }
-  }, [project.audio.src, project.audio.start, project.audio.end, toast]);
+  }, [
+    project.audio.src,
+    project.audio.start,
+    project.audio.end,
+    project.script.sttModel,
+    project.script.sttLanguage,
+    toast
+  ]);
 
   /**
    * Option B — user has pasted their own script and wants captions to follow
@@ -474,6 +484,55 @@ function AppInner() {
       toast.show(`Cache clear failed: ${(e as Error).message}`, 'error');
     }
   }, [toast, handleTranscribe]);
+
+  /**
+   * Open / close the per-word transcript editor dialog.
+   */
+  const [transcriptEditorOpen, setTranscriptEditorOpen] = useState(false);
+
+  /**
+   * Download a .srt sidecar of the current script + word timings. Useful for
+   * users who toggle off "Burn-in" and need a separate captions file for
+   * platforms like YouTube that accept SRT uploads.
+   */
+  const handleDownloadSRT = useCallback(() => {
+    const text = project.script.text.trim();
+    if (!text) {
+      toast.show('No script to export.', 'warning');
+      return;
+    }
+    // Use filtered words so the SRT matches what's burned on the video.
+    const filtered = filterFillerWords(
+      text,
+      project.script.wordTimes,
+      project.script.wordEnds,
+      !!project.script.filterFillers,
+      project.script.customFillers ?? []
+    );
+    const cues = buildCues(
+      filtered.words,
+      filtered.wordTimes,
+      filtered.wordEnds,
+      Math.max(1, totalDuration(project.clips))
+    );
+    const srt = cuesToSRT(cues);
+    const blob = new Blob([srt], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'captions.srt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast.show(`Saved captions.srt (${cues.length} cues)`, 'success');
+  }, [
+    project.script.text,
+    project.script.wordTimes,
+    project.script.wordEnds,
+    project.script.filterFillers,
+    project.script.customFillers,
+    project.clips,
+    toast
+  ]);
 
   function removeClip(id: string) {
     setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== id) }));
@@ -623,6 +682,8 @@ function AppInner() {
                 transcribing={transcribing}
                 transcribeProgress={transcribeProgress}
                 transcribeError={transcribeError}
+                onEditTranscript={() => setTranscriptEditorOpen(true)}
+                onDownloadSRT={handleDownloadSRT}
               />
             </Paper>
           </Stack>
@@ -744,6 +805,18 @@ function AppInner() {
           </Typography>
         </Box>
       </Container>
+
+      {/*
+        Per-word transcript editor — opens from the ScriptPanel "Edit words"
+        button. Only useful after Whisper has produced word-level timestamps,
+        but harmless to mount at all times.
+      */}
+      <TranscriptEditorDialog
+        open={transcriptEditorOpen}
+        script={project.script}
+        onClose={() => setTranscriptEditorOpen(false)}
+        onSave={(next) => setProject((p) => ({ ...p, script: next }))}
+      />
     </Box>
   );
 }

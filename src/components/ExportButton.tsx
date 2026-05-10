@@ -13,7 +13,10 @@ import {
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import MovieFilterIcon from '@mui/icons-material/MovieFilter';
+import SubtitlesIcon from '@mui/icons-material/Subtitles';
 import { exportVideo, type ExportProgress, type ExportResult } from '../engine/export';
+import { totalDuration } from '../engine/render';
+import { filterFillerWords, buildCues, cuesToSRT } from '../engine/captionText';
 import type { ProjectState } from '../types';
 
 interface Props {
@@ -120,6 +123,44 @@ export function ExportButton({ project }: Props) {
               >
                 Download {result.filename}
               </Button>
+              {/*
+                Sidecar SRT download. Always offered when there's a script,
+                but especially useful when the user disabled "Burn-in" so
+                the video file ships without burned captions.
+              */}
+              {project.script.text.trim() && (
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<SubtitlesIcon />}
+                  onClick={() => {
+                    const filtered = filterFillerWords(
+                      project.script.text,
+                      project.script.wordTimes,
+                      project.script.wordEnds,
+                      !!project.script.filterFillers,
+                      project.script.customFillers ?? []
+                    );
+                    const cues = buildCues(
+                      filtered.words,
+                      filtered.wordTimes,
+                      filtered.wordEnds,
+                      Math.max(1, totalDuration(project.clips))
+                    );
+                    const blob = new Blob([cuesToSRT(cues)], {
+                      type: 'text/plain;charset=utf-8'
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = result.filename.replace(/\.[^.]+$/, '') + '.srt';
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  }}
+                >
+                  Download .srt sidecar
+                </Button>
+              )}
             </Stack>
           )}
         </DialogContent>

@@ -4,10 +4,12 @@ import {
   Box,
   Button,
   Divider,
+  FormControlLabel,
   IconButton,
   LinearProgress,
   MenuItem,
   Stack,
+  Switch,
   TextField,
   Tooltip,
   Typography
@@ -16,6 +18,8 @@ import CasinoIcon from '@mui/icons-material/Casino';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import DownloadIcon from '@mui/icons-material/Download';
+import TuneIcon from '@mui/icons-material/Tune';
 import {
   CAPTION_ANIM_GROUPS,
   CAPTION_ANIM_LABELS,
@@ -24,6 +28,7 @@ import {
 } from '../types';
 import { newCaptionSeed } from '../engine/captionAi';
 import type { STTProgress } from '../engine/speechToText';
+import { CAPTION_PRESETS } from '../engine/captionPresets';
 
 interface Props {
   script: ProjectScript;
@@ -54,6 +59,12 @@ interface Props {
   transcribeProgress?: STTProgress | null;
   /** Last transcription error (if any) — surfaces the cache-clear button. */
   transcribeError?: string | null;
+  /**
+   * Open the per-word transcript editor (table). Owner manages the dialog.
+   */
+  onEditTranscript?: () => void;
+  /** Download an .srt sidecar of the current script + word timings. */
+  onDownloadSRT?: () => void;
 }
 
 interface AnimOption {
@@ -86,7 +97,9 @@ export function ScriptPanel({
   onClearCache,
   transcribing,
   transcribeProgress,
-  transcribeError
+  transcribeError,
+  onEditTranscript,
+  onDownloadSRT
 }: Props) {
   const animValue =
     ANIM_OPTIONS.find((o) => o.id === script.animation) ?? ANIM_OPTIONS[0];
@@ -165,6 +178,54 @@ export function ScriptPanel({
           >
             {transcribing ? 'Transcribing\u2026' : 'Transcribe audio'}
           </Button>
+          {/* Model + language pickers — swap the engine + spoken language. */}
+          <TextField
+            select
+            size="small"
+            label="Model"
+            value={script.sttModel ?? 'en'}
+            onChange={(e) =>
+              onChange({
+                ...script,
+                sttModel: e.target.value as 'en' | 'multi'
+              })
+            }
+            sx={{ minWidth: 130 }}
+            disabled={transcribing}
+          >
+            <MenuItem value="en">English (fast)</MenuItem>
+            <MenuItem value="multi">Multilingual</MenuItem>
+          </TextField>
+          {script.sttModel === 'multi' && (
+            <TextField
+              select
+              size="small"
+              label="Language"
+              value={script.sttLanguage ?? 'auto'}
+              onChange={(e) =>
+                onChange({ ...script, sttLanguage: e.target.value })
+              }
+              sx={{ minWidth: 130 }}
+              disabled={transcribing}
+            >
+              <MenuItem value="auto">Auto-detect</MenuItem>
+              <MenuItem value="en">English</MenuItem>
+              <MenuItem value="es">Spanish</MenuItem>
+              <MenuItem value="fr">French</MenuItem>
+              <MenuItem value="de">German</MenuItem>
+              <MenuItem value="hi">Hindi</MenuItem>
+              <MenuItem value="pt">Portuguese</MenuItem>
+              <MenuItem value="it">Italian</MenuItem>
+              <MenuItem value="ja">Japanese</MenuItem>
+              <MenuItem value="ko">Korean</MenuItem>
+              <MenuItem value="zh">Chinese</MenuItem>
+              <MenuItem value="ar">Arabic</MenuItem>
+              <MenuItem value="ru">Russian</MenuItem>
+              <MenuItem value="tr">Turkish</MenuItem>
+              <MenuItem value="nl">Dutch</MenuItem>
+              <MenuItem value="pl">Polish</MenuItem>
+            </TextField>
+          )}
           {hasTranscript && (
             <Tooltip title="Word timing from speech-to-text is active">
               <Typography
@@ -178,6 +239,16 @@ export function ScriptPanel({
                 {'\u2713 word-synced'}
               </Typography>
             </Tooltip>
+          )}
+          {hasTranscript && onEditTranscript && (
+            <Button
+              variant="text"
+              size="small"
+              startIcon={<TuneIcon fontSize="small" />}
+              onClick={onEditTranscript}
+            >
+              Edit words
+            </Button>
           )}
         </Stack>
         {transcribing && (
@@ -330,6 +401,90 @@ export function ScriptPanel({
             <CasinoIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+      </Stack>
+
+      {/* ============== Caption preset + karaoke + filler ============== */}
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+        <TextField
+          select
+          size="small"
+          label="Preset"
+          sx={{ minWidth: 200 }}
+          value={script.preset ?? 'auto'}
+          onChange={(e) =>
+            onChange({ ...script, preset: e.target.value || undefined })
+          }
+        >
+          {CAPTION_PRESETS.map((p) => (
+            <MenuItem key={p.id} value={p.id}>
+              <Stack>
+                <Typography variant="body2">{p.label}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {p.description}
+                </Typography>
+              </Stack>
+            </MenuItem>
+          ))}
+        </TextField>
+
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={!!script.karaoke}
+              onChange={(e) =>
+                onChange({ ...script, karaoke: e.target.checked })
+              }
+            />
+          }
+          label={<Typography variant="caption">Karaoke highlight</Typography>}
+        />
+
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={!!script.filterFillers}
+              onChange={(e) =>
+                onChange({ ...script, filterFillers: e.target.checked })
+              }
+            />
+          }
+          label={
+            <Tooltip title="Strip uh, um, like, you-know\u2026 from captions">
+              <Typography variant="caption">Strip fillers</Typography>
+            </Tooltip>
+          }
+        />
+
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={script.burnIn !== false}
+              onChange={(e) =>
+                onChange({ ...script, burnIn: e.target.checked })
+              }
+            />
+          }
+          label={
+            <Tooltip title="Off = export captions as a separate .srt file instead of pixels">
+              <Typography variant="caption">Burn-in</Typography>
+            </Tooltip>
+          }
+        />
+
+        {onDownloadSRT && (
+          <Button
+            size="small"
+            variant="text"
+            startIcon={<DownloadIcon fontSize="small" />}
+            onClick={onDownloadSRT}
+            disabled={!script.text.trim()}
+          >
+            .srt
+          </Button>
+        )}
       </Stack>
     </Stack>
   );
