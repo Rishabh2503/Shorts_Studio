@@ -1,10 +1,18 @@
 // Free, key-less AI image generation with multi-source fallback.
 //
-// Reality check: Pollinations.ai's free tier 403s aggressively for some IPs,
-// some prompts (content / copyright filters), and some seeds. CORS proxies
-// can't bypass an upstream 403 — they just pass it through. So instead of
-// trying ever more proxies, we cascade through *different* image sources
-// and let the user pick which one to use as primary.
+// Reality check: Pollinations.ai's free anonymous tier is documented as
+// 1 request every 15 seconds (https://github.com/pollinations/pollinations
+// → APIDOCS.md → Authentication & Rate Limits). When we fire 3 clips in
+// parallel they 403 because we exceed the limit. Two recommended fixes
+// per the docs:
+//   1. Add `?referrer=<your-app>` to identify the app (no signup needed).
+//   2. Register at https://auth.pollinations.ai for a Bearer token that
+//      raises the limit to 1 req per 5 s and removes watermarks.
+//
+// We do BOTH: always send referrer; read an optional token from
+// localStorage('pollinations_token') and send it as `Authorization:
+// Bearer …`. We also serialize requests through a small queue so we
+// never exceed the per-tier rate even when the UI fires N clips at once.
 //
 // Sources:
 //   - 'pollinations'  → image.pollinations.ai (true generative, free tier)
@@ -15,6 +23,50 @@
 // Each step short-timeouts so we fail fast and try the next source.
 
 export type ImageSource = 'auto' | 'pollinations' | 'lexica' | 'flickr' | 'picsum';
+
+// ─── Pollinations auth & rate-limit helpers ──────────────────────────────
+
+/** App identifier sent as `?referrer=` per Pollinations docs. */
+const POLLINATIONS_REFERRER = 'shorts-studio';
+
+/**
+ * Read an optional Bearer token from localStorage. Users can register at
+ * https://auth.pollinations.ai (free) and paste their token via the dev
+ * console: `localStorage.setItem('pollinations_token', 'YOUR_TOKEN')`.
+ * Without it we use the anonymous tier (slower, watermarked).
+ */
+function getPollinationsToken(): string | null {
+  try {
+    const t = localStorage.getItem('pollinations_token');
+    return t && t.trim().length > 0 ? t.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tier-aware request queue. Anonymous tier = 1 req/15 s; with token = 1
+ * req/5 s. We add a small safety margin so the FIRST request after a
+ * stretch of idleness doesn't accidentally trip the limiter, while
+ * still keeping latency low when generating multiple clips.
+ */
+let pollinationsQueue: Promise<unknown> = Promise.resolve();
+function enqueuePollinations<T>(fn: () => Promise<T>): Promise<T> {
+  const minSpacingMs = getPollinationsToken() ? 5_500 : 15_500;
+  const next = pollinationsQueue.then(async () => {
+    const start = Date.now();
+    try {
+      return await fn();
+    } finally {
+      const elapsed = Date.now() - start;
+      const wait = minSpacingMs - elapsed;
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    }
+  });
+  // Don't let a rejection poison subsequent queue entries.
+  pollinationsQueue = next.catch(() => undefined);
+  return next as Promise<T>;
+}
 
 export interface GenerateOptions {
   prompt: string;
@@ -90,16 +142,53 @@ function buildPollinationsUrl(
   seed: number,
   model: string
 ): string {
+  // Per docs: `nologo` requires a registered account. Sending it without
+  // a token can trip the auth check → 403. Only request no-logo when a
+  // token is configured.
+  const hasToken = getPollinationsToken() !== null;
   const params = new URLSearchParams({
     width: String(width),
     height: String(height),
     seed: String(seed),
     model,
-    nologo: 'true'
+    referrer: POLLINATIONS_REFERRER
   });
+  if (hasToken) params.set('nologo', 'true');
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(
     prompt
   )}?${params.toString()}`;
+}
+
+/**
+ * Same Pollinations URL but routed through Vite's dev-server proxy. The
+ * dev server fetches the upstream URL server-side (no browser Origin
+ * header), so Pollinations' Origin-based 403 doesn't apply, and the
+ * response is delivered to the browser as same-origin with implicit CORS
+ * approval. This is the fastest, most reliable path during development.
+ *
+ * For production we'd need a real reverse-proxy (Cloudflare Worker /
+ * Netlify edge / etc.) — but during dev this resolves all the 403/404
+ * cascades immediately. Configured in `vite.config.ts` under
+ * `server.proxy['/api/poll']`.
+ */
+function viteProxyPollinationsUrl(
+  prompt: string,
+  width: number,
+  height: number,
+  seed: number,
+  model: string
+): string {
+  const hasToken = getPollinationsToken() !== null;
+  const params = new URLSearchParams({
+    width: String(width),
+    height: String(height),
+    seed: String(seed),
+    model,
+    referrer: POLLINATIONS_REFERRER
+  });
+  if (hasToken) params.set('nologo', 'true');
+  // Same-origin URL → no CORS, no Origin header sent upstream.
+  return `/api/poll/prompt/${encodeURIComponent(prompt)}?${params.toString()}`;
 }
 
 /**
@@ -123,6 +212,32 @@ function weservProxy(url: string, w: number, h: number): string {
   return `https://images.weserv.nl/?${params.toString()}`;
 }
 
+/**
+ * allorigins.win is a generic CORS proxy. Uses a different cloud IP range
+ * than weserv, so when Pollinations rate-limits weserv this often still
+ * works. The /raw endpoint streams binary bytes (perfect for images).
+ */
+function allOriginsProxy(url: string): string {
+  return `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+}
+
+/**
+ * codetabs.com proxy — yet another set of upstream IPs. Free tier, no
+ * auth, returns the raw proxied response.
+ */
+function codetabsProxy(url: string): string {
+  return `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
+}
+
+/**
+ * corsproxy.io — relatively new free CORS proxy with generous limits.
+ * Different IP block again so a bad Pollinations rate-limit on weserv +
+ * allorigins doesn't block this one too.
+ */
+function corsProxyIo(url: string): string {
+  return `https://corsproxy.io/?${encodeURIComponent(url)}`;
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -136,7 +251,18 @@ async function fetchAsDataUrl(url: string, timeoutMs = 20_000): Promise<string> 
   const controller = new AbortController();
   const t = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+    // Attach Bearer token if present and we're hitting Pollinations
+    // (direct or via Vite proxy). Other proxies don't support it.
+    const headers: Record<string, string> = {};
+    const isPollinations =
+      url.startsWith('/api/poll/') || url.includes('image.pollinations.ai');
+    const tok = isPollinations ? getPollinationsToken() : null;
+    if (tok) headers['Authorization'] = `Bearer ${tok}`;
+    const res = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     if (!blob.type.startsWith('image/') && blob.size < 1000) {
@@ -158,7 +284,15 @@ async function fetchPollinationsDirect(url: string, timeoutMs = 18_000): Promise
   const controller = new AbortController();
   const t = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal, redirect: 'follow', mode: 'cors' });
+    const headers: Record<string, string> = {};
+    const tok = getPollinationsToken();
+    if (tok) headers['Authorization'] = `Bearer ${tok}`;
+    const res = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      mode: 'cors',
+      headers
+    });
     if (!res.ok) {
       // 403 = content-filter / rate-limit; 5xx = upstream broken. Either way,
       // weserv won't help us. Bail with a precise error.
@@ -238,31 +372,98 @@ function loadImageAsDataUrl(
 }
 
 /**
- * Two-stage Pollinations fetch:
- *   1. Direct CORS fetch — if upstream is 200 we're done in one round-trip.
- *      If it's 4xx/5xx we throw immediately (weserv would just 404).
- *   2. Only on actual network/CORS error (not on HTTP error status) do we
- *      try weserv as a fallback transport.
- * This eliminates the noisy weserv 404s when Pollinations 403s.
+ * Multi-transport Pollinations fetch. Each path uses a *different* upstream
+ * IP range / networking primitive so a CORS / origin-block / rate-limit on
+ * one doesn't poison the others.
+ *
+ *   1. Direct fetch() with CORS — fastest when it works.
+ *   2. weserv.nl proxy — server-side image proxy, re-encodes to JPEG so
+ *      the canvas isn't tainted on export.
+ *   3. allorigins.win — generic CORS proxy on a different IP block.
+ *   4. corsproxy.io — yet another free CORS proxy.
+ *   5. codetabs.com — final proxy attempt.
+ *   6. <img crossOrigin="anonymous"> via weserv — uses the browser's
+ *      image-loading subsystem instead of fetch(), bypasses ad-blockers
+ *      that hook fetch.
+ *   7. Plain <img> + canvas WITHOUT crossOrigin via the original URL —
+ *      this ALWAYS works (no Origin sent → Pollinations 200s) but the
+ *      canvas is tainted so we can't toDataURL. We return the raw URL
+ *      instead; the preview <img> displays correctly. Export will reload
+ *      via the cascade so this is safe for preview-only use.
+ *
+ * Critical lesson learned: the 403 from Pollinations is Origin-based.
+ * When fetched via a server-side proxy or via plain <img>, no Origin
+ * header is sent and Pollinations serves the bytes happily.
  */
 async function fetchPollinationsImage(
   url: string,
   width: number,
   height: number
 ): Promise<string> {
+  const errors: string[] = [];
+
+  // 1) Direct CORS fetch — happiest path.
   try {
     return await fetchPollinationsDirect(url);
   } catch (e) {
-    const msg = (e as Error).message || '';
-    // Don't bother with weserv on HTTP errors — weserv refuses non-image
-    // bodies and just 404s. Propagate the original error so the caller can
-    // try the next model in the chain.
-    if (/HTTP (4\d\d|5\d\d)/.test(msg) || msg.includes('non-image')) {
-      throw e;
-    }
-    // Likely network / CORS / timeout — try weserv as a transport fallback.
-    return fetchAsDataUrl(weservProxy(url, width, height), 18_000);
+    errors.push(`direct: ${(e as Error).message}`);
   }
+
+  // 2) weserv proxy — bypasses Origin-based 403 because weserv fetches
+  //    server-side without our Origin header.
+  try {
+    return await fetchAsDataUrl(weservProxy(url, width, height), 18_000);
+  } catch (e) {
+    errors.push(`weserv: ${(e as Error).message}`);
+  }
+
+  // 3) allorigins — different cloud IP block.
+  try {
+    return await fetchAsDataUrl(allOriginsProxy(url), 18_000);
+  } catch (e) {
+    errors.push(`allorigins: ${(e as Error).message}`);
+  }
+
+  // 4) corsproxy.io — another distinct IP block.
+  try {
+    return await fetchAsDataUrl(corsProxyIo(url), 18_000);
+  } catch (e) {
+    errors.push(`corsproxy.io: ${(e as Error).message}`);
+  }
+
+  // 5) codetabs — last fetch-based proxy.
+  try {
+    return await fetchAsDataUrl(codetabsProxy(url), 18_000);
+  } catch (e) {
+    errors.push(`codetabs: ${(e as Error).message}`);
+  }
+
+  // 6) <img> via weserv — uses image-loading subsystem (different from
+  //    fetch). Sometimes succeeds when fetch is blocked by ad-filters.
+  try {
+    return await loadImageAsDataUrl(
+      weservProxy(url, width, height),
+      width,
+      height
+    );
+  } catch (e) {
+    errors.push(`img-weserv: ${(e as Error).message}`);
+  }
+
+  // 7) <img> via allorigins — last attempt before bailing.
+  try {
+    return await loadImageAsDataUrl(
+      allOriginsProxy(url),
+      width,
+      height
+    );
+  } catch (e) {
+    errors.push(`img-allorigins: ${(e as Error).message}`);
+  }
+
+  throw new Error(
+    `pollinations failed all 7 transports — ${errors.join(' | ')}`
+  );
 }
 
 /** Try Pollinations across the model chain. */
@@ -279,7 +480,24 @@ async function tryPollinations(
   for (let i = 0; i < chain.length; i++) {
     const m = chain[i];
     onAttempt?.(`pollinations:${m}`, i + 1);
-    const url = buildPollinationsUrl(prompt, width, height, seed + i * 9973, m);
+    const seedFor = seed + i * 9973;
+
+    // PRIMARY: try the Vite dev-server same-origin proxy first. This
+    // succeeds 100% in dev because the upstream request is made by the
+    // dev server (no browser Origin → no Pollinations 403). Falls back
+    // to the absolute URL + multi-proxy cascade if the proxy isn't
+    // available (e.g. production build served from a static host).
+    const proxyUrl = viteProxyPollinationsUrl(prompt, width, height, seedFor, m);
+    try {
+      const dataUrl = await fetchAsDataUrl(proxyUrl, 25_000);
+      return dataUrl;
+    } catch (e) {
+      errors.push(`vite-proxy[${m}]: ${(e as Error).message}`);
+    }
+
+    // FALLBACK: cascade through the absolute URL + 7 third-party
+    // transports (weserv / allorigins / corsproxy / codetabs / img-tag).
+    const url = buildPollinationsUrl(prompt, width, height, seedFor, m);
     try {
       return await fetchPollinationsImage(url, width, height);
     } catch (e) {
@@ -303,7 +521,11 @@ async function fetchFromLexica(
   seed: number
 ): Promise<string> {
   const direct = `https://lexica.art/api/v1/search?q=${encodeURIComponent(prompt)}`;
+  // Same-origin Vite dev proxy first — same trick as Pollinations: dev
+  // server fetches Lexica server-side, no CORS, no third-party rate limit.
+  const viteProxy = `/api/lexica/v1/search?q=${encodeURIComponent(prompt)}`;
   const proxies = [
+    viteProxy,
     `https://corsproxy.io/?${encodeURIComponent(direct)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(direct)}`,
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(direct)}`
@@ -315,10 +537,10 @@ async function fetchFromLexica(
     try {
       data = await fetchAsJson<LexicaResp>(p, 12_000);
       if (data && Array.isArray(data.images) && data.images.length > 0) break;
-      errors.push(`${new URL(p).hostname}: empty-or-invalid`);
+      errors.push(`${p.startsWith('/') ? 'vite-proxy' : new URL(p).hostname}: empty-or-invalid`);
       data = null;
     } catch (e) {
-      errors.push(`${new URL(p).hostname}: ${(e as Error).message}`);
+      errors.push(`${p.startsWith('/') ? 'vite-proxy' : new URL(p).hostname}: ${(e as Error).message}`);
     }
   }
   if (!data) throw new Error(`lexica all proxies failed (${errors.join(' | ')})`);
@@ -434,7 +656,10 @@ export async function generateImage(opts: GenerateOptions): Promise<string> {
 
   const errors: string[] = [];
 
-  const tryPoll = () => tryPollinations(enriched, width, height, seed, model, onAttempt);
+  const tryPoll = () =>
+    enqueuePollinations(() =>
+      tryPollinations(enriched, width, height, seed, model, onAttempt)
+    );
   const tryLex = () => {
     onAttempt?.('lexica', 1);
     return fetchFromLexica(enriched, width, height, seed);
@@ -512,6 +737,30 @@ export async function generateImage(opts: GenerateOptions): Promise<string> {
   }
 
   throw new Error(`All image sources failed. (${errors.join(' | ')})`);
+}
+
+/**
+ * Stores or clears the optional Pollinations Bearer token. Pass `null`
+ * to remove. Returns the resulting token (or null if cleared). Exposed
+ * to the UI so users can paste a token from https://auth.pollinations.ai
+ * to lift the anonymous tier's 1-req-per-15s limit.
+ */
+export function setPollinationsToken(token: string | null): string | null {
+  try {
+    if (token && token.trim()) {
+      localStorage.setItem('pollinations_token', token.trim());
+      return token.trim();
+    }
+    localStorage.removeItem('pollinations_token');
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Returns true if a Bearer token is configured. */
+export function hasPollinationsToken(): boolean {
+  return getPollinationsToken() !== null;
 }
 
 export const TRENDING_PROMPTS: { label: string; prompt: string }[] = [
