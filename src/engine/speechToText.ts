@@ -64,10 +64,18 @@ export interface TranscribeOptions {
 }
 
 const MODEL_IDS: Record<WhisperModelKind, string> = {
-  // Newer, transformers.js v3-native ports avoid the qdq / SimplifiedLayerNorm
-  // bugs that the original `Xenova/*` exports trigger on current Chromium.
-  en: 'onnx-community/whisper-tiny.en',
-  multi: 'onnx-community/whisper-base'
+  // CRITICAL: must use the *_timestamped variants. Word-level timestamps
+  // (`return_timestamps: 'word'`) require the model to have been exported
+  // with `output_attentions=True` so we can extract the cross-attention
+  // matrices. The plain `onnx-community/whisper-tiny.en` (and base) repos
+  // do NOT include those outputs, and inference fails with:
+  //   "Model outputs must contain cross attentions to extract timestamps.
+  //    This is most likely because the model was not exported with
+  //    output_attentions=True."
+  // The `_timestamped` repos are byte-identical weights re-exported with
+  // attention heads exposed for transformers.js's word-timestamp path.
+  en: 'onnx-community/whisper-tiny.en_timestamped',
+  multi: 'onnx-community/whisper-base_timestamped'
 };
 const TARGET_SAMPLE_RATE = 16000; // Whisper expects 16 kHz mono float32
 

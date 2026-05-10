@@ -380,11 +380,28 @@ function AppInner() {
       // files and stops Whisper from picking up speech the user cut.
       const trimStart = project.audio.start;
       const trimEnd = project.audio.end ?? project.audio.duration ?? undefined;
+      // Throttle progress updates to ~10fps. Without this, transformers.js
+      // fires hundreds of `progress` events per second during chunked
+      // download + token-level inference, which causes React's "Maximum
+      // update depth exceeded" warning under StrictMode and pegs the main
+      // thread re-rendering.
+      let lastProgressUpdate = 0;
+      let lastStage: string | undefined;
       const result = await transcribeAudio(src, {
         trim: { start: trimStart, end: trimEnd ?? undefined },
         model: project.script.sttModel ?? 'en',
         language: project.script.sttLanguage ?? 'auto',
-        onProgress: (p) => setTranscribeProgress(p)
+        onProgress: (p) => {
+          const now = performance.now();
+          // Always push when the stage changes or when 100ms have passed
+          // since the last UI update. This keeps the bar smooth without
+          // flooding React with re-renders.
+          if (p.stage !== lastStage || now - lastProgressUpdate >= 100) {
+            lastStage = p.stage;
+            lastProgressUpdate = now;
+            setTranscribeProgress(p);
+          }
+        }
       });
       // Map words into project time. Drop anything outside the trim window.
       const startCut = project.audio.start;
