@@ -17,24 +17,32 @@ interface Props {
   onAddImage: (src: string, prompt?: string) => void;
 }
 
-const MODELS = [
-  { value: 'flux', label: 'Flux (default)' },
-  { value: 'flux-realism', label: 'Flux Realism' },
-  { value: 'flux-anime', label: 'Flux Anime' },
-  { value: 'turbo', label: 'Turbo (fastest)' }
+// Pollinations deprecated `flux-realism` and `flux-anime` (their /models
+// endpoint now lists only a single backbone). So instead of exposing model
+// names that the API silently ignores, we expose *style presets* which
+// inject descriptors into the prompt — that's what actually controls the
+// final aesthetic regardless of which underlying model serves the request.
+const STYLES: { value: 'auto' | 'realistic' | 'anime' | 'cinematic' | '3d-render' | 'oil-painting' | 'watercolor'; label: string; hint: string }[] = [
+  { value: 'auto', label: 'Auto (no style hint)', hint: 'Let the model choose based on prompt' },
+  { value: 'realistic', label: 'Photorealistic', hint: '35mm, natural lighting, lifelike' },
+  { value: 'anime', label: 'Anime / Manga', hint: 'Cel shading, vibrant 2D art' },
+  { value: 'cinematic', label: 'Cinematic film', hint: 'Dramatic lighting, anamorphic' },
+  { value: '3d-render', label: '3D render', hint: 'Octane / Blender ray-traced look' },
+  { value: 'oil-painting', label: 'Oil painting', hint: 'Rich brush strokes, classical' },
+  { value: 'watercolor', label: 'Watercolor', hint: 'Soft washes, paper texture' }
 ];
 
 const SOURCES: { value: ImageSource; label: string; hint: string }[] = [
-  { value: 'auto', label: 'Auto (recommended)', hint: 'Pollinations → Lexica → Flickr → Picsum' },
+  { value: 'auto', label: 'Auto (recommended)', hint: 'Pollinations → Flickr → Picsum (Lexica skipped — currently down)' },
   { value: 'pollinations', label: 'Pollinations AI (true generative)', hint: 'Best quality, sometimes rate-limited' },
-  { value: 'lexica', label: 'Lexica catalog (curated AI)', hint: 'Pre-generated AI art, very reliable' },
+  { value: 'lexica', label: 'Lexica catalog (curated AI)', hint: 'Pre-generated AI art — currently 5xx-flaky' },
   { value: 'flickr', label: 'Flickr photos (keyword-relevant)', hint: 'Real photos matching your keywords' },
   { value: 'picsum', label: 'Stock photo (random)', hint: 'Random photo, no AI — last-resort' }
 ];
 
 export function MediaPanel({ onAddImage }: Props) {
   const [prompt, setPrompt] = useState('');
-  const [model, setModel] = useState('flux');
+  const [style, setStyle] = useState<typeof STYLES[number]['value']>('auto');
   const [source, setSource] = useState<ImageSource>('auto');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>('');
@@ -49,7 +57,7 @@ export function MediaPanel({ onAddImage }: Props) {
     try {
       const url = await generateImage({
         prompt: p,
-        model,
+        style,
         source,
         onAttempt: (label, attempt) => {
           if (attempt === 0 && label.startsWith('sanitized:')) {
@@ -130,20 +138,20 @@ export function MediaPanel({ onAddImage }: Props) {
         <TextField
           select
           size="small"
-          label="Model"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={source !== 'auto' && source !== 'pollinations'}
+          label="Style"
+          value={style}
+          onChange={(e) => setStyle(e.target.value as typeof STYLES[number]['value'])}
+          disabled={source === 'picsum'}
           sx={{ flex: 1 }}
           helperText={
-            source === 'lexica' || source === 'picsum' || source === 'flickr'
-              ? 'N/A for this source'
-              : 'Pollinations model'
+            source === 'picsum'
+              ? 'N/A for stock photos'
+              : (STYLES.find((s) => s.value === style)?.hint ?? 'Style preset')
           }
         >
-          {MODELS.map((m) => (
-            <MenuItem key={m.value} value={m.value}>
-              {m.label}
+          {STYLES.map((s) => (
+            <MenuItem key={s.value} value={s.value}>
+              {s.label}
             </MenuItem>
           ))}
         </TextField>

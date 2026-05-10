@@ -73,19 +73,60 @@ export interface GenerateOptions {
   width?: number;
   height?: number;
   seed?: number;
-  /** Preferred Pollinations model: 'flux' | 'flux-realism' | 'flux-anime' | 'turbo' */
+  /**
+   * Pollinations model. As of 2025 their public catalog is essentially
+   * `flux` (default) and `turbo`; specialty variants like `flux-realism`
+   * and `flux-anime` were deprecated and are now silently aliased to the
+   * default. So we keep this for compat but route all aesthetic choices
+   * through `style` instead, which is far more reliable.
+   */
   model?: string;
+  /**
+   * Style preset. Appends a curated set of descriptors to the prompt so
+   * the model produces the desired aesthetic. This works regardless of
+   * which underlying model Pollinations routes us to.
+   */
+  style?:
+    | 'auto'
+    | 'realistic'
+    | 'anime'
+    | 'cinematic'
+    | '3d-render'
+    | 'oil-painting'
+    | 'watercolor';
   /** Which provider to use. 'auto' tries pollinations → lexica → picsum. */
   source?: ImageSource;
   /** Optional notifier so the UI can show 'retrying with another model…' */
   onAttempt?: (label: string, attempt: number) => void;
 }
 
+/**
+ * Style presets → prompt suffix. These descriptors are far more reliable
+ * than the deprecated `flux-realism` / `flux-anime` model parameters,
+ * which Pollinations now silently ignores.
+ */
+const STYLE_SUFFIXES: Record<NonNullable<GenerateOptions['style']>, string> = {
+  'auto': '',
+  'realistic':
+    'photorealistic, real photograph, 35mm DSLR, sharp focus, natural lighting, lifelike skin texture, no anime, no illustration, no cartoon',
+  'anime':
+    'anime art style, manga, cel shading, vibrant colors, expressive eyes, studio-quality 2D illustration',
+  'cinematic':
+    'cinematic photography, dramatic lighting, shallow depth of field, anamorphic lens flare, film grain, color graded',
+  '3d-render':
+    '3D render, octane render, blender, ray-tracing, subsurface scattering, ultra detailed materials',
+  'oil-painting':
+    'oil painting on canvas, rich brush strokes, classical fine art, gallery masterpiece, dramatic chiaroscuro',
+  'watercolor':
+    'watercolor painting, soft washes, delicate brushwork, pastel palette, paper texture'
+};
+
 const FALLBACK_CHAIN: Record<string, string[]> = {
+  // Pollinations effectively serves a single default model now — chain
+  // is just primary → backup variant. Both are real catalog entries.
   flux: ['flux', 'turbo'],
-  'flux-realism': ['flux-realism', 'flux', 'turbo'],
-  'flux-anime': ['flux-anime', 'flux', 'turbo'],
-  turbo: ['turbo', 'flux']
+  turbo: ['turbo', 'flux'],
+  sana: ['sana', 'flux']
 };
 
 /**
@@ -127,12 +168,19 @@ function sanitizePrompt(prompt: string): string {
 /**
  * Pad short prompts so they read more like the kind of detailed prompts that
  * pass Pollinations' content / quality filters reliably. Long prompts are kept
- * as-is so user intent isn't overridden.
+ * as-is so user intent isn't overridden. Style suffix is always appended
+ * because that's what controls the final aesthetic.
  */
-function enrichPrompt(prompt: string): string {
+function enrichPrompt(prompt: string, style?: GenerateOptions['style']): string {
   const trimmed = prompt.trim();
-  if (trimmed.length >= 60) return trimmed;
-  return `${trimmed}, vertical 9:16 composition, cinematic lighting, ultra detailed, sharp focus, vibrant colors, high quality`;
+  const styleSuffix =
+    style && style !== 'auto' ? STYLE_SUFFIXES[style] : '';
+  // Long prompts: just append style. Short prompts: pad + style.
+  const padded =
+    trimmed.length >= 60
+      ? trimmed
+      : `${trimmed}, vertical 9:16 composition, cinematic lighting, ultra detailed, sharp focus, vibrant colors, high quality`;
+  return styleSuffix ? `${padded}, ${styleSuffix}` : padded;
 }
 
 function buildPollinationsUrl(
@@ -641,6 +689,7 @@ export async function generateImage(opts: GenerateOptions): Promise<string> {
     height = 1820,
     seed = Math.floor(Math.random() * 1_000_000),
     model = 'flux',
+    style = 'auto',
     source = 'auto',
     onAttempt
   } = opts;
@@ -651,7 +700,7 @@ export async function generateImage(opts: GenerateOptions): Promise<string> {
     // "batman" prompt produced a generic vigilante. attempt=0 is a sentinel.
     onAttempt?.(`sanitized: ${sanitized.slice(0, 60)}`, 0);
   }
-  const enriched = enrichPrompt(sanitized);
+  const enriched = enrichPrompt(sanitized, style);
   if (!enriched) throw new Error('Prompt is required.');
 
   const errors: string[] = [];
@@ -660,10 +709,6 @@ export async function generateImage(opts: GenerateOptions): Promise<string> {
     enqueuePollinations(() =>
       tryPollinations(enriched, width, height, seed, model, onAttempt)
     );
-  const tryLex = () => {
-    onAttempt?.('lexica', 1);
-    return fetchFromLexica(enriched, width, height, seed);
-  };
   const tryFlickr = () => {
     onAttempt?.('flickr', 1);
     // Use the *sanitized* prompt (not the enriched one) for keyword search
@@ -695,7 +740,8 @@ export async function generateImage(opts: GenerateOptions): Promise<string> {
   }
   if (source === 'lexica') {
     try {
-      return await tryLex();
+      onAttempt?.('lexica', 1);
+      return await fetchFromLexica(enriched, width, height, seed);
     } catch (e) {
       errors.push(`lexica: ${(e as Error).message}`);
       onAttempt?.('flickr (fallback)', 99);
@@ -710,18 +756,14 @@ export async function generateImage(opts: GenerateOptions): Promise<string> {
   if (source === 'flickr') return tryFlickr();
   if (source === 'picsum') return tryPic();
 
-  // Auto: full cascade — generative first, then keyword-relevant photo,
-  // then random photo as absolute last resort.
+  // Auto: cascade. Lexica's API has been 5xx-flaky for weeks across all
+  // proxies, so we skip it in auto mode — it's still selectable as an
+  // explicit `source: 'lexica'` for users who want to try it. The auto
+  // cascade goes Pollinations → Flickr (keyword-relevant) → Picsum.
   try {
     return await tryPoll();
   } catch (e) {
     errors.push(`pollinations: ${(e as Error).message}`);
-  }
-  try {
-    onAttempt?.('lexica', 1);
-    return await fetchFromLexica(enriched, width, height, seed);
-  } catch (e) {
-    errors.push(`lexica: ${(e as Error).message}`);
   }
   try {
     onAttempt?.('flickr', 1);
