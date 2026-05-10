@@ -91,25 +91,31 @@ async function getPipeline(
       // -------------------------------------------------------------------
       // dtype + device strategy (battle-tested order)
       // -------------------------------------------------------------------
-      // We learned the hard way that on current Chromium ORT-Web:
-      //   * `Xenova/whisper-tiny.en` + q4/q8 trips
-      //     "qdq_actions.cc Missing required scale".
-      //   * fp16 encoder trips "SimplifiedLayerNormFusion ...
-      //     InsertedPrecisionFreeCast".
-      //   * WebGPU on Windows ignores `powerPreference` (crbug 369219127)
-      //     and silently picks the integrated GPU, which then OOMs on
-      //     whisper-base. The first transcribe "succeeds" but inference
-      //     races and the next call fails forever from a poisoned cache.
+      // CRITICAL discovery (May 2026): passing `dtype: 'fp32'` as a SINGLE
+      // STRING does NOT cascade to all whisper sub-models. transformers.js
+      // v3 silently keeps the merged decoder at q4, then ORT-Web throws
+      //   "qdq_actions.cc:137 TransposeDQWeightsForMatMulNBits Missing
+      //    required scale: ...weight_merged_0_scale..."
+      // The fix is to pass `dtype` as a per-component dict so the encoder
+      // and decoder_model_merged each get an explicit precision. This is
+      // also the pattern documented on onnx-community model cards.
       //
-      // The reliable combo is:
-      //   1. `wasm + q8`   — small (~40 MB tiny.en, ~120 MB base) and fast
-      //   2. `wasm + fp32` — biggest, slowest, but the most stable on bugs
+      // Working combos on Chromium / WASM:
+      //   * encoder=fp32,  decoder_merged=fp32  — most stable, biggest
+      //   * encoder=fp32,  decoder_merged=q4    — much smaller, sometimes
+      //                                          breaks on Windows ORT
       //
-      // We expose WebGPU as a third *non-Windows* attempt because on macOS
-      // / Linux it's a 3-5× speedup with no platform regression.
+      // Broken combos to AVOID:
+      //   * Any `fp16` encoder (SimplifiedLayerNormFusion crash)
+      //   * `q8`/`int8` anywhere (qdq_actions / MatMulNBits crash)
+      //   * Single-string dtype (silent q4 cascade — the bug above)
+      type DtypeDict = {
+        encoder_model: 'fp32' | 'q4';
+        decoder_model_merged: 'fp32' | 'q4';
+      };
       type Attempt = {
         device: 'webgpu' | 'wasm';
-        dtype: 'q8' | 'fp32';
+        dtype: DtypeDict;
         label: string;
       };
 
@@ -122,15 +128,26 @@ async function getPipeline(
         (navigator as Navigator & { gpu?: unknown }).gpu != null;
 
       const attempts: Attempt[] = [
-        { device: 'wasm', dtype: 'q8', label: 'wasm/int8 (fast, small)' },
-        { device: 'wasm', dtype: 'fp32', label: 'wasm/fp32 (full precision)' }
+        // 1) Full fp32 — heaviest but bulletproof on every backend.
+        {
+          device: 'wasm',
+          dtype: { encoder_model: 'fp32', decoder_model_merged: 'fp32' },
+          label: 'wasm fp32 encoder + fp32 decoder (stable)'
+        },
+        // 2) fp32 encoder + q4 decoder — half the bytes; works when q4 is
+        //    supported by the host OS but encoder still must stay fp32.
+        {
+          device: 'wasm',
+          dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' },
+          label: 'wasm fp32 encoder + q4 decoder (compact)'
+        }
       ];
       if (hasWebGPU && !isWindows) {
         // WebGPU only on non-Windows where powerPreference is honoured.
         attempts.unshift({
           device: 'webgpu',
-          dtype: 'fp32',
-          label: 'webgpu/fp32 (GPU accelerated)'
+          dtype: { encoder_model: 'fp32', decoder_model_merged: 'fp32' },
+          label: 'webgpu fp32 (GPU accelerated)'
         });
       }
 
@@ -158,6 +175,10 @@ async function getPipeline(
       };
 
       let lastErr: unknown = null;
+      // Track whether we've already auto-purged the HTTP/IDB cache during
+      // this load attempt so we never loop forever if the network itself
+      // is the problem.
+      let autoPurged = false;
       for (let i = 0; i < attempts.length; i++) {
         const a = attempts[i];
         onProgress?.({
@@ -182,6 +203,61 @@ async function getPipeline(
         } catch (err) {
           lastErr = err;
           const msg = String((err as Error)?.message ?? err);
+          const isPoisonedCache =
+            /qdq_actions|MatMulNBits|Missing required scale|SimplifiedLayerNormFusion|InsertedPrecisionFreeCast/i.test(
+              msg
+            );
+
+          // Self-heal: if we hit the qdq / fusion bugs and we haven't yet
+          // wiped the HTTP cache this run, purge it and re-try the SAME
+          // attempt once. These errors usually mean the browser cached a
+          // half-broken weight file from an earlier session.
+          if (isPoisonedCache && !autoPurged) {
+            autoPurged = true;
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[speechToText] Detected poisoned cache for ${MODEL_IDS[kind]}. Auto-purging Cache Storage + IndexedDB and retrying ${a.label}\u2026`
+            );
+            onProgress?.({
+              stage: 'load-model',
+              message: 'Cleaning corrupt model cache and retrying\u2026'
+            });
+            try {
+              if (typeof caches !== 'undefined') {
+                await caches.delete('transformers-cache');
+              }
+              if (typeof indexedDB !== 'undefined' && 'databases' in indexedDB) {
+                const dbs = await (
+                  indexedDB as unknown as {
+                    databases: () => Promise<{ name?: string }[]>;
+                  }
+                ).databases();
+                await Promise.all(
+                  dbs
+                    .filter(
+                      (d) =>
+                        d.name &&
+                        /transformers|huggingface|whisper|onnx/i.test(d.name)
+                    )
+                    .map(
+                      (d) =>
+                        new Promise<void>((resolve) => {
+                          const req = indexedDB.deleteDatabase(d.name!);
+                          req.onsuccess = () => resolve();
+                          req.onerror = () => resolve();
+                          req.onblocked = () => resolve();
+                        })
+                    )
+                );
+              }
+            } catch {
+              /* ignore */
+            }
+            // Replay the same attempt by decrementing i.
+            i -= 1;
+            continue;
+          }
+
           const isLast = i === attempts.length - 1;
           // eslint-disable-next-line no-console
           console.warn(
@@ -325,6 +401,12 @@ export async function transcribeAudio(
       workingDuration = endSec - startSec;
     }
   }
+  // eslint-disable-next-line no-console
+  console.info(
+    `[speechToText] Sending ${workingDuration.toFixed(2)}s (${workingSamples.length} samples @ 16 kHz, ` +
+      `${(workingSamples.byteLength / 1048576).toFixed(2)} MB) to Whisper. ` +
+      `Trim window: [${(trim?.start ?? 0).toFixed(2)}s\u2013${(trim?.end ?? duration).toFixed(2)}s] of ${duration.toFixed(2)}s file.`
+  );
 
   const pipe = await getPipeline(model, onProgress);
 
