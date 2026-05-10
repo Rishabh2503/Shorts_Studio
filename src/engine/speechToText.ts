@@ -342,10 +342,19 @@ export async function transcribeAudio(
     if (language && language !== 'auto') callOpts.language = language;
     callOpts.task = 'transcribe';
   }
-  const out = (await pipe(workingSamples, callOpts)) as {
-    text: string;
-    chunks?: { text: string; timestamp: [number, number | null] }[];
-  };
+  let out: { text: string; chunks?: { text: string; timestamp: [number, number | null] }[] };
+  try {
+    out = (await pipe(workingSamples, callOpts)) as typeof out;
+  } catch (err) {
+    // Inference failed AFTER the model loaded. The pipeline is now in a
+    // half-broken state (especially on WebGPU OOM); evict so a retry
+    // re-attempts with a fresh device/dtype combo.
+    pipelineCache.delete(model);
+    const msg = String((err as Error)?.message ?? err);
+    throw new Error(
+      `Transcription failed during inference. Try again, or click "Clear cache & retry". (${msg.slice(0, 200)})`
+    );
+  }
 
   const chunks = out.chunks ?? [];
   const words: STTWord[] = [];

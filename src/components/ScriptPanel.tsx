@@ -108,7 +108,8 @@ export function ScriptPanel({
   const hasPastedText = script.text.trim().length > 0 && !hasTranscript;
 
   // Compose a friendly status line for the loader. First-time users wait on
-  // the model download (~50MB), so we want a clear progress indicator.
+  // the model download (~40-150MB depending on quantization), so we want a
+  // clear progress indicator with the actual file + MB if the engine has it.
   let progressText = '';
   let progressValue: number | undefined;
   if (transcribing && transcribeProgress) {
@@ -117,19 +118,24 @@ export function ScriptPanel({
         transcribeProgress.progress != null
           ? ` ${Math.round(transcribeProgress.progress * 100)}%`
           : '';
-      progressText = `Loading speech model${pct}\u2026 (one-time, ~50MB)`;
+      // Engine emits a richer message when it knows the file + bytes. Prefer it.
+      progressText =
+        transcribeProgress.message ??
+        `Loading speech model${pct}\u2026 (one-time, ~40\u2013150 MB)`;
       progressValue = transcribeProgress.progress;
     } else if (transcribeProgress.stage === 'decode-audio') {
-      progressText = 'Decoding audio\u2026';
+      progressText = transcribeProgress.message ?? 'Decoding audio\u2026';
     } else if (transcribeProgress.stage === 'transcribe') {
-      progressText = 'Transcribing speech\u2026';
+      progressText = transcribeProgress.message ?? 'Transcribing speech\u2026';
     }
   }
 
-  // Detect cache-corruption errors so we can offer a one-click cleanup.
+  // Detect cache-corruption / transient errors so we can offer a one-click
+  // cleanup. We're permissive — better to surface the button too often than
+  // hide it when the user actually needs it.
   const errorIsRetryable =
     !!transcribeError &&
-    /create a session|qdq_actions|MatMulNBits|missing required scale/i.test(
+    /create a session|qdq_actions|MatMulNBits|missing required scale|SimplifiedLayerNormFusion|InsertedPrecisionFreeCast|inference|failed to load|backend|webgpu|wasm/i.test(
       transcribeError
     );
 
