@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, memo } from 'react';
 import {
   Autocomplete,
   Box,
@@ -124,6 +124,115 @@ const CAPTION_ANIM_OPTIONS: CaptionAnimOption[] = CAPTION_ANIM_GROUPS.flatMap((g
   g.animations.map((id) => ({ id, label: CAPTION_ANIM_LABELS[id], group: g.label }))
 );
 
+/**
+ * Single thumbnail in the timeline strip. Pulled out as a memoized component
+ * so editing one clip's duration / caption / split mode does NOT re-render
+ * every other thumbnail \u2014 important once a project has 20+ clips, since
+ * each thumbnail mounts an `<img>` and a couple of nested Boxes.
+ *
+ * The custom equality check is intentional: we compare only the fields the
+ * thumbnail actually paints. Mutating an unrelated field on the clip (e.g.
+ * `effectSeed`) shouldn't trigger a re-render here.
+ */
+interface ClipThumbProps {
+  clip: ImageClip;
+  index: number;
+  start: number;
+  end: number;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}
+
+const ClipThumb = memo(
+  function ClipThumb({ clip, index, start, end, selected, onSelect }: ClipThumbProps) {
+    return (
+      <Tooltip
+        title={`#${index + 1} \u2022 ${fmt(start)} \u2192 ${fmt(end)} (${fmt(clip.duration)})`}
+        arrow
+      >
+        <Box
+          onClick={() => onSelect(clip.id)}
+          sx={{
+            position: 'relative',
+            flex: '0 0 auto',
+            width: 72,
+            height: 96,
+            borderRadius: 2,
+            overflow: 'hidden',
+            cursor: 'pointer',
+            border: selected
+              ? '2px solid #a78bfa'
+              : '1px solid rgba(255,255,255,0.12)',
+            boxShadow: selected ? '0 0 0 4px rgba(167,139,250,0.18)' : 'none',
+            transition: 'all 120ms'
+          }}
+        >
+          <img
+            src={clip.src}
+            alt=""
+            loading="lazy"
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block'
+            }}
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.opacity = '0.3';
+            }}
+          />
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: 0,
+              px: 0.5,
+              py: 0.25,
+              background:
+                'linear-gradient(180deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%)',
+              fontSize: 10,
+              color: '#fff',
+              fontFamily: 'ui-monospace, monospace'
+            }}
+          >
+            {fmt(start)}
+          </Box>
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              px: 0.5,
+              py: 0.25,
+              background:
+                'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.85) 100%)',
+              fontSize: 10,
+              color: '#fff',
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontFamily: 'ui-monospace, monospace'
+            }}
+          >
+            <span>#{index + 1}</span>
+            <span>{clip.duration.toFixed(1)}s</span>
+          </Box>
+        </Box>
+      </Tooltip>
+    );
+  },
+  (prev, next) =>
+    prev.clip.id === next.clip.id &&
+    prev.clip.src === next.clip.src &&
+    prev.clip.duration === next.clip.duration &&
+    prev.index === next.index &&
+    prev.start === next.start &&
+    prev.end === next.end &&
+    prev.selected === next.selected &&
+    prev.onSelect === next.onSelect
+);
+
 export function Timeline({
   clips,
   selectedId,
@@ -189,83 +298,15 @@ export function Timeline({
         {clips.map((c, i) => {
           const ts = timestamps[i];
           return (
-            <Tooltip
+            <ClipThumb
               key={c.id}
-              title={`#${i + 1} • ${fmt(ts.start)} → ${fmt(ts.end)} (${fmt(c.duration)})`}
-              arrow
-            >
-              <Box
-                onClick={() => onSelect(c.id)}
-                sx={{
-                  position: 'relative',
-                  flex: '0 0 auto',
-                  width: 72,
-                  height: 96,
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  cursor: 'pointer',
-                  border:
-                    selectedId === c.id
-                      ? '2px solid #a78bfa'
-                      : '1px solid rgba(255,255,255,0.12)',
-                  boxShadow:
-                    selectedId === c.id ? '0 0 0 4px rgba(167,139,250,0.18)' : 'none',
-                  transition: 'all 120ms'
-                }}
-              >
-                <img
-                  src={c.src}
-                  alt=""
-                  loading="lazy"
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    display: 'block'
-                  }}
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.opacity = '0.3';
-                  }}
-                />
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    px: 0.5,
-                    py: 0.25,
-                    background:
-                      'linear-gradient(180deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%)',
-                    fontSize: 10,
-                    color: '#fff',
-                    fontFamily: 'ui-monospace, monospace'
-                  }}
-                >
-                  {fmt(ts.start)}
-                </Box>
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    px: 0.5,
-                    py: 0.25,
-                    background:
-                      'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.85) 100%)',
-                    fontSize: 10,
-                    color: '#fff',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontFamily: 'ui-monospace, monospace'
-                  }}
-                >
-                  <span>#{i + 1}</span>
-                  <span>{c.duration.toFixed(1)}s</span>
-                </Box>
-              </Box>
-            </Tooltip>
+              clip={c}
+              index={i}
+              start={ts.start}
+              end={ts.end}
+              selected={selectedId === c.id}
+              onSelect={onSelect}
+            />
           );
         })}
       </Box>

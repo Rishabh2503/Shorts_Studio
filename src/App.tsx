@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import {
   Box,
   Button,
@@ -23,6 +23,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SubtitlesIcon from '@mui/icons-material/Subtitles';
 import AspectRatioIcon from '@mui/icons-material/AspectRatio';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import { v4 as uuid } from 'uuid';
 import {
   ASPECT_RATIOS,
@@ -38,15 +39,33 @@ import { newCaptionSeed } from './engine/captionAi';
 import { analyzeAudio, invalidateAudioAnalysis } from './engine/audioAnalyzer';
 import { transcribeAudio, clearWhisperCache, type STTProgress } from './engine/speechToText';
 import { filterFillerWords, buildCues, cuesToSRT } from './engine/captionText';
+import { idbGet, idbSet } from './engine/storage';
 import { PreviewCanvas } from './components/PreviewCanvas';
 import { MediaPanel } from './components/MediaPanel';
 import { Timeline } from './components/Timeline';
 import { AudioPanel } from './components/AudioPanel';
 import { ScriptPanel } from './components/ScriptPanel';
-import { TranscriptEditorDialog } from './components/TranscriptEditorDialog';
+/**
+ * Heavy dialog components are split into their own chunks so they don't
+ * weigh down the initial JS bundle. Both are only opened on explicit user
+ * action (clicking "Edit words" or the help icon), so paying the
+ * download cost on demand is the right tradeoff.
+ */
+const TranscriptEditorDialog = lazy(() =>
+  import('./components/TranscriptEditorDialog').then((m) => ({
+    default: m.TranscriptEditorDialog
+  }))
+);
+const UserGuideDialog = lazy(() =>
+  import('./components/UserGuideDialog').then((m) => ({
+    default: m.UserGuideDialog
+  }))
+);
 import { ExportButton } from './components/ExportButton';
 import { DropZone } from './components/DropZone';
 import { ToastProvider, useToast } from './components/Toast';
+import { NotificationsMenu } from './components/NotificationsMenu';
+// UserGuideDialog is lazy-loaded above.
 import { pruneCache } from './engine/imageCache';
 
 export default function App() {
@@ -60,6 +79,12 @@ export default function App() {
 function AppInner() {
   const toast = useToast();
   const [project, setProject] = useState<ProjectState>(DEFAULT_PROJECT);
+  /**
+   * Tracks whether the persisted project (if any) has been restored from
+   * IndexedDB yet. We block autosave until this flips true so the very
+   * first save can't clobber the on-disk copy with the default project.
+   */
+  const [hydrated, setHydrated] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -94,6 +119,71 @@ function AppInner() {
    * can mount/unmount cleanly and aria-expanded reflects the open state.
    */
   const [ratioMenuAnchor, setRatioMenuAnchor] = useState<HTMLElement | null>(null);
+  /** Controls visibility of the full-page user guide dialog. */
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  // ---- Autosave / restore ---------------------------------------------------
+  //
+  // The project is persisted to IndexedDB on every change (debounced) so a
+  // refresh, crash, or accidental close doesn't lose work. We deliberately
+  // strip out anything that can't survive a reload before saving:
+  //
+  //   - blob: URLs (clip.src / audio.src / clip.splitSrc) \u2014 these point
+  //     to in-memory Blobs that vanish on reload, so persisting them would
+  //     produce broken images on restore. Remote https:// URLs (Pollinations,
+  //     Lexica) and inlined data: URLs are fine to keep.
+  //   - The transient `audio.duration` field is metadata that gets re-derived
+  //     on next decode.
+  //
+  // Strategy: hydrate once on mount, then write back on every project change
+  // \u2014 but only after hydration finishes (so the first save can't clobber
+  // an existing on-disk copy with the empty default project).
+  const PROJECT_KEY = 'project:current';
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await idbGet<ProjectState>(PROJECT_KEY);
+      if (!cancelled && saved) {
+        // Lightweight schema check so adding/removing fields in the future
+        // doesn't crash the app for users on old saves.
+        if (saved.clips && saved.audio && saved.script) {
+          setProject(saved);
+        }
+      }
+      if (!cancelled) setHydrated(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    // Strip blob: URLs that won't survive a reload \u2014 keeps the saved
+    // project tidy and avoids broken-image flashes on next open.
+    const sanitized: ProjectState = {
+      ...project,
+      clips: project.clips.map((c) => ({
+        ...c,
+        src: c.src?.startsWith('blob:') ? '' : c.src,
+        splitSrc: c.splitSrc?.startsWith('blob:') ? '' : c.splitSrc
+      })),
+      audio: {
+        ...project.audio,
+        src: project.audio.src?.startsWith('blob:') ? null : project.audio.src
+      },
+      audio2: {
+        ...project.audio2,
+        src: project.audio2.src?.startsWith('blob:') ? null : project.audio2.src
+      }
+    };
+    // Debounce so rapid edits (slider drags) don't hammer IDB.
+    const t = window.setTimeout(() => {
+      idbSet(PROJECT_KEY, sanitized);
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [project, hydrated]);
+  // ---------------------------------------------------------------------------
   const audioRef = useRef<HTMLAudioElement | null>(null);
   /**
    * Second audio element — plays the background bed in parallel with the
@@ -730,7 +820,12 @@ function AppInner() {
           spacing={2}
           mb={{ xs: 2, sm: 3 }}
         >
-          <Stack direction="row" alignItems="center" spacing={1.5}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1.5}
+            sx={{ width: { xs: '100%', md: 'auto' } }}
+          >
             <Box
               sx={{
                 width: 44,
@@ -746,7 +841,7 @@ function AppInner() {
             >
               <AutoAwesomeIcon sx={{ color: '#fff' }} />
             </Box>
-            <Box>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography variant="h4" sx={{ lineHeight: 1, fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>
                 Shorts Studio
               </Typography>
@@ -754,6 +849,33 @@ function AppInner() {
                 AI-powered YouTube Shorts maker • runs entirely in your browser
               </Typography>
             </Box>
+            {/*
+              Always-visible utility icons. They sit inside the title row
+              (not the format-controls stack) so they remain reachable on
+              mobile, where the format stack is hidden. flex:1 on the title
+              Box pushes these to the far right of the row.
+            */}
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+              <NotificationsMenu />
+              <Tooltip title="User guide \u2014 how to use Shorts Studio" placement="bottom" arrow>
+                <IconButton
+                  size="small"
+                  onClick={() => setGuideOpen(true)}
+                  aria-label="Open user guide"
+                  aria-haspopup="dialog"
+                  sx={{
+                    color: 'text.secondary',
+                    transition: 'color 160ms ease',
+                    '&:hover': {
+                      color: '#22d3ee',
+                      background: 'rgba(34,211,238,0.10)'
+                    }
+                  }}
+                >
+                  <HelpOutlineRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
           </Stack>
           <Stack
             direction="row"
@@ -1032,12 +1154,33 @@ function AppInner() {
         button. Only useful after Whisper has produced word-level timestamps,
         but harmless to mount at all times.
       */}
-      <TranscriptEditorDialog
-        open={transcriptEditorOpen}
-        script={project.script}
-        onClose={() => setTranscriptEditorOpen(false)}
-        onSave={(next) => setProject((p) => ({ ...p, script: next }))}
-      />
+      {/*
+        Per-word transcript editor \u2014 opens from the ScriptPanel "Edit words"
+        button. Lazy-loaded: the chunk is only fetched the first time the
+        user actually opens the editor, keeping the initial bundle lean.
+        We mount the component only when `open` is true so React.lazy doesn't
+        eagerly resolve on first paint.
+      */}
+      {transcriptEditorOpen && (
+        <Suspense fallback={null}>
+          <TranscriptEditorDialog
+            open={transcriptEditorOpen}
+            script={project.script}
+            onClose={() => setTranscriptEditorOpen(false)}
+            onSave={(next) => setProject((p) => ({ ...p, script: next }))}
+          />
+        </Suspense>
+      )}
+
+      {/*
+        User guide / help dialog. Same lazy strategy \u2014 first open pays
+        a tiny network cost for the chunk, subsequent opens are instant.
+      */}
+      {guideOpen && (
+        <Suspense fallback={null}>
+          <UserGuideDialog open={guideOpen} onClose={() => setGuideOpen(false)} />
+        </Suspense>
+      )}
     </Box>
   );
 }
