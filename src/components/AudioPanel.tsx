@@ -10,6 +10,7 @@ import {
   Typography
 } from '@mui/material';
 import MusicNoteIcon from '@mui/icons-material/MusicNote';
+import HeadphonesIcon from '@mui/icons-material/Headphones';
 import ClearIcon from '@mui/icons-material/Clear';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import type { ProjectAudio } from '../types';
@@ -19,6 +20,16 @@ interface Props {
   onChange: (audio: ProjectAudio) => void;
   /** Called when user clicks "Restart" — host should rewind playhead to 0. */
   onRestart?: () => void;
+  /**
+   * 'main' (default) renders the full transcript-capable panel with the
+   * Loop / Fit-video / Fit-audio sync modes. 'background' renders a slim
+   * panel for the secondary track — only volume, trim, and a Loop/Play-once
+   * choice. Background tracks are never transcribed and never drive
+   * project duration; they just mix in alongside the main audio so the user
+   * can layer royalty-free music with their voiceover to avoid copyright
+   * strikes.
+   */
+  role?: 'main' | 'background';
 }
 
 /** Format a seconds value as `m:ss.t` for compact captions. */
@@ -29,7 +40,8 @@ function fmt(sec: number): string {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`;
 }
 
-export function AudioPanel({ audio, onChange, onRestart }: Props) {
+export function AudioPanel({ audio, onChange, onRestart, role = 'main' }: Props) {
+  const isBackground = role === 'background';
   function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -60,21 +72,34 @@ export function AudioPanel({ audio, onChange, onRestart }: Props) {
 
   return (
     <Stack spacing={1.5}>
-      <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-        Audio
-      </Typography>
+      <Stack direction="row" spacing={0.75} alignItems="center">
+        {isBackground ? (
+          <HeadphonesIcon fontSize="small" sx={{ color: '#22d3ee' }} />
+        ) : (
+          <MusicNoteIcon fontSize="small" sx={{ color: '#a78bfa' }} />
+        )}
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+          {isBackground ? 'Background audio' : 'Audio'}
+        </Typography>
+      </Stack>
       <Typography variant="caption" color="text.secondary">
-        Upload a track, then trim and choose how it syncs with the video.
+        {isBackground
+          ? 'Optional second track that plays in parallel — add a royalty-free music bed to avoid copyright strikes. Not used for transcription.'
+          : 'Upload a track, then trim and choose how it syncs with the video.'}
       </Typography>
 
       <Stack direction="row" spacing={1}>
         <Button
           component="label"
           variant="outlined"
-          startIcon={<MusicNoteIcon />}
+          startIcon={isBackground ? <HeadphonesIcon /> : <MusicNoteIcon />}
           fullWidth
         >
-          {audio.src ? 'Replace track' : 'Upload audio'}
+          {audio.src
+            ? 'Replace track'
+            : isBackground
+              ? 'Add background music'
+              : 'Upload audio'}
           <input
             type="file"
             accept="audio/*"
@@ -164,30 +189,56 @@ export function AudioPanel({ audio, onChange, onRestart }: Props) {
 
           {/* Sync mode */}
           <Box mt={1}>
-            <TextField
-              select
-              size="small"
-              fullWidth
-              label="Sync with video"
-              value={audio.syncMode}
-              onChange={(e) =>
-                onChange({
-                  ...audio,
-                  syncMode: e.target.value as ProjectAudio['syncMode']
-                })
-              }
-              helperText={
-                audio.syncMode === 'loop'
-                  ? 'Audio loops to fill the video length.'
-                  : audio.syncMode === 'fitVideo'
-                    ? 'Video stretches to match the audio trim length.'
-                    : 'Audio plays once across the trimmed range; video keeps its own length.'
-              }
-            >
-              <MenuItem value="loop">Loop audio to video</MenuItem>
-              <MenuItem value="fitVideo">Fit video to audio length</MenuItem>
-              <MenuItem value="fitAudio">Play audio once (no loop)</MenuItem>
-            </TextField>
+            {isBackground ? (
+              <TextField
+                select
+                size="small"
+                fullWidth
+                label="Background behavior"
+                value={audio.syncMode === 'loop' ? 'loop' : 'fitAudio'}
+                onChange={(e) =>
+                  onChange({
+                    ...audio,
+                    // Background only supports loop or play-once. Storing as
+                    // ProjectAudio['syncMode'] keeps the export logic uniform.
+                    syncMode: e.target.value as ProjectAudio['syncMode']
+                  })
+                }
+                helperText={
+                  audio.syncMode === 'loop'
+                    ? 'Loops the trimmed range until the video ends.'
+                    : 'Plays the trimmed range once, then goes silent.'
+                }
+              >
+                <MenuItem value="loop">Loop until video ends</MenuItem>
+                <MenuItem value="fitAudio">Play once (no loop)</MenuItem>
+              </TextField>
+            ) : (
+              <TextField
+                select
+                size="small"
+                fullWidth
+                label="Sync with video"
+                value={audio.syncMode}
+                onChange={(e) =>
+                  onChange({
+                    ...audio,
+                    syncMode: e.target.value as ProjectAudio['syncMode']
+                  })
+                }
+                helperText={
+                  audio.syncMode === 'loop'
+                    ? 'Audio loops to fill the video length.'
+                    : audio.syncMode === 'fitVideo'
+                      ? 'Video stretches to match the audio trim length.'
+                      : 'Audio plays once across the trimmed range; video keeps its own length.'
+                }
+              >
+                <MenuItem value="loop">Loop audio to video</MenuItem>
+                <MenuItem value="fitVideo">Fit video to audio length</MenuItem>
+                <MenuItem value="fitAudio">Play audio once (no loop)</MenuItem>
+              </TextField>
+            )}
           </Box>
         </Box>
       )}

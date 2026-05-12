@@ -92,6 +92,16 @@ export type CaptionAnimationId =
   | 'rainbow'
   | 'neon';
 
+/**
+ * Split-screen modes. When a clip has both `src` and `splitSrc`, the canvas
+ * is divided into two halves and the two images are cover-fitted into each.
+ *  - 'horizontal': two halves stacked left/right (most common — side-by-side
+ *    portraits work great for 9:16 reaction shorts).
+ *  - 'vertical': halves stacked top/bottom (useful for 16:9 / 1:1).
+ *  - 'none' / undefined: single-image rendering (legacy behavior).
+ */
+export type SplitMode = 'none' | 'horizontal' | 'vertical';
+
 export interface ImageClip {
   id: string;
   /** dataURL or remote URL of the image */
@@ -117,6 +127,16 @@ export interface ImageClip {
    * effect — defeating the "not fixed every time" goal.
    */
   effectSeed?: number;
+  /**
+   * Second image source for split-screen layouts. Both `src` and `splitSrc`
+   * share the same effect, transition, duration and caption — they're two
+   * panels of one clip, not two clips.
+   */
+  splitSrc?: string;
+  /** Layout of the split. Defaults to 'none' (single image). */
+  splitMode?: SplitMode;
+  /** Prompt used to generate the split image (for re-rolls). */
+  splitPrompt?: string;
 }
 
 export interface ProjectAudio {
@@ -210,11 +230,61 @@ export interface ProjectScript {
   burnIn?: boolean;
 }
 
+/**
+ * Supported output aspect ratios.
+ *  - '9:16'  : Shorts / Reels / TikTok portrait (default)
+ *  - '16:9'  : YouTube landscape / desktop
+ *  - '1:1'   : Instagram feed square
+ *  - '4:5'   : Instagram portrait (taller than square, shorter than 9:16)
+ *  - '4:3'   : Classic TV / slideshow landscape
+ */
+export type AspectRatioId = '9:16' | '16:9' | '1:1' | '4:5' | '4:3';
+
+export interface AspectRatioInfo {
+  label: string;
+  width: number;
+  height: number;
+  /** CSS `aspect-ratio` value (e.g. '9 / 16') for layout containers. */
+  css: string;
+  /** Short tag for the placeholder text on an empty canvas. */
+  tag: string;
+}
+
+/**
+ * Canonical resolutions for each supported aspect ratio. Heights are clamped
+ * so the longest side never exceeds 1920 — this keeps the canvas encoder
+ * within sane memory on low-end machines while still producing high-quality
+ * uploads for every platform.
+ */
+export const ASPECT_RATIOS: Record<AspectRatioId, AspectRatioInfo> = {
+  '9:16': { label: 'Shorts (9:16)', width: 1080, height: 1920, css: '9 / 16', tag: 'YouTube Shorts • 9:16 • 1080×1920' },
+  '16:9': { label: 'Landscape (16:9)', width: 1920, height: 1080, css: '16 / 9', tag: 'YouTube • 16:9 • 1920×1080' },
+  '1:1': { label: 'Square (1:1)', width: 1080, height: 1080, css: '1 / 1', tag: 'Square • 1:1 • 1080×1080' },
+  '4:5': { label: 'Portrait (4:5)', width: 1080, height: 1350, css: '4 / 5', tag: 'Portrait • 4:5 • 1080×1350' },
+  '4:3': { label: 'Classic (4:3)', width: 1440, height: 1080, css: '4 / 3', tag: 'Classic • 4:3 • 1440×1080' }
+};
+
+/** Quick helper for callers that just want the dims. */
+export function getCanvasDims(ratio: AspectRatioId): { width: number; height: number } {
+  const info = ASPECT_RATIOS[ratio];
+  return { width: info.width, height: info.height };
+}
+
 export interface ProjectState {
   clips: ImageClip[];
   audio: ProjectAudio;
-  width: number; // 1080
-  height: number; // 1920
+  /**
+   * Optional secondary audio track that plays in parallel with `audio` but is
+   * NEVER used as the transcription source. Lets the user combine, say, a
+   * royalty-free background bed with their own voiceover so the resulting
+   * upload avoids copyright strikes. The transcript / word-timestamps always
+   * come from the main `audio` track.
+   */
+  audio2: ProjectAudio;
+  /** Selected output aspect ratio. `width` / `height` are derived from this. */
+  aspectRatio: AspectRatioId;
+  width: number; // derived from aspectRatio
+  height: number; // derived from aspectRatio
   fps: number; // 30
   /**
    * Master switch for the animated-caption overlay. Defaults off so users who
@@ -239,9 +309,9 @@ export interface ProjectState {
   };
 }
 
-export const DEFAULT_PROJECT: ProjectState = {
-  clips: [],
-  audio: {
+/** Factory so we don't share a mutable reference between the two audio slots. */
+function makeDefaultAudio(): ProjectAudio {
+  return {
     src: null,
     name: '',
     volume: 0.8,
@@ -249,9 +319,16 @@ export const DEFAULT_PROJECT: ProjectState = {
     end: null,
     duration: null,
     syncMode: 'loop'
-  },
-  width: 1080,
-  height: 1920,
+  };
+}
+
+export const DEFAULT_PROJECT: ProjectState = {
+  clips: [],
+  audio: makeDefaultAudio(),
+  audio2: { ...makeDefaultAudio(), volume: 0.35 }, // background mixed lower by default
+  aspectRatio: '9:16',
+  width: ASPECT_RATIOS['9:16'].width,
+  height: ASPECT_RATIOS['9:16'].height,
   fps: 30,
   captionsEnabled: false,
   script: {

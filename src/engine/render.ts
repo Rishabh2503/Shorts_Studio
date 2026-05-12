@@ -2,6 +2,7 @@
 // onto a target 2D canvas. Used both for live preview and for export recording.
 
 import type {
+  AspectRatioId,
   CaptionAnimationId,
   EffectId,
   ImageClip,
@@ -9,6 +10,7 @@ import type {
   ProjectState,
   TransitionId
 } from '../types';
+import { ASPECT_RATIOS } from '../types';
 import { pickEffectForPrompt } from './effectPicker';
 import { pickCaptionStyle, type CaptionStyleAuto } from './captionAi';
 import { distributeRevealTimes } from './audioAnalyzer';
@@ -18,6 +20,8 @@ import { filterFillerWords } from './captionText';
 
 export interface LoadedClip extends ImageClip {
   image: HTMLImageElement;
+  /** Second image when the clip is in split-screen mode. */
+  splitImage?: HTMLImageElement;
 }
 
 export async function loadImage(src: string): Promise<HTMLImageElement> {
@@ -27,7 +31,20 @@ export async function loadImage(src: string): Promise<HTMLImageElement> {
 export async function preloadClips(clips: ImageClip[]): Promise<LoadedClip[]> {
   // Load in parallel; skip broken sources so one bad image doesn't kill preview.
   const results = await Promise.allSettled(
-    clips.map(async (c) => ({ ...c, image: await loadImageCached(c.src) }))
+    clips.map(async (c) => {
+      const image = await loadImageCached(c.src);
+      let splitImage: HTMLImageElement | undefined;
+      // Load the partner image too — ignore failures so a broken split image
+      // gracefully falls back to single-image rendering.
+      if (c.splitSrc && c.splitMode && c.splitMode !== 'none') {
+        try {
+          splitImage = await loadImageCached(c.splitSrc);
+        } catch {
+          splitImage = undefined;
+        }
+      }
+      return { ...c, image, splitImage };
+    })
   );
   const out: LoadedClip[] = [];
   for (const r of results) {
@@ -437,6 +454,59 @@ function buildFilterString(t: DrawTransform): string {
   if (t.grayscale > 0) parts.push(`grayscale(${t.grayscale})`);
   if (t.invert > 0) parts.push(`invert(${t.invert})`);
   return parts.length ? parts.join(' ') : 'none';
+}
+
+/**
+ * Draw two images in a split-screen layout, each cover-fit into its half of
+ * the canvas. The same effect transform is applied to both halves so motion
+ * stays in sync. A small divider line is painted on top so the seam looks
+ * intentional instead of bleeding the two images together.
+ */
+function drawSplitCover(
+  ctx: CanvasRenderingContext2D,
+  imgA: HTMLImageElement,
+  imgB: HTMLImageElement,
+  W: number,
+  H: number,
+  t: DrawTransform,
+  mode: 'horizontal' | 'vertical'
+) {
+  // 'horizontal' = side-by-side (left/right); 'vertical' = stacked (top/bottom).
+  // For each half we clip the canvas and translate the origin, then call
+  // drawCover with the half's W/H so cover math fits the image to the half
+  // rather than to the full canvas.
+  const aw = mode === 'horizontal' ? Math.floor(W / 2) : W;
+  const ah = mode === 'horizontal' ? H : Math.floor(H / 2);
+  const bx = mode === 'horizontal' ? aw : 0;
+  const by = mode === 'horizontal' ? 0 : ah;
+
+  // Half A — top-left at (0, 0)
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, aw, ah);
+  ctx.clip();
+  drawCover(ctx, imgA, aw, ah, t);
+  ctx.restore();
+
+  // Half B — top-left at (bx, by)
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(bx, by, W - bx, H - by);
+  ctx.clip();
+  ctx.translate(bx, by);
+  drawCover(ctx, imgB, W - bx, H - by, t);
+  ctx.restore();
+
+  // Divider line for visual clarity.
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  const thick = Math.max(2, Math.round(Math.min(W, H) * 0.004));
+  if (mode === 'horizontal') {
+    ctx.fillRect(aw - Math.floor(thick / 2), 0, thick, H);
+  } else {
+    ctx.fillRect(0, ah - Math.floor(thick / 2), W, thick);
+  }
+  ctx.restore();
 }
 
 function drawCover(
@@ -1476,20 +1546,29 @@ export function renderFrame(rc: RenderContext, t: number): void {
   const local = Math.max(0, Math.min(clip.duration, t - acc));
   const progress = local / clip.duration;
 
-  const drawCurrent = () => {
-    const tr = applyEffect(resolveEffect(clip), progress);
-    drawCover(ctx, clip.image, W, H, tr);
+  /**
+   * Draw a clip's image(s) onto the canvas. When the clip has a valid
+   * second image and split mode, the canvas is split into two halves and
+   * each image is cover-fit into its half. Both halves share the clip's
+   * effect so motion looks coherent across the divider.
+   */
+  const drawClipImages = (c: LoadedClip, p: number) => {
+    const tr = applyEffect(resolveEffect(c), p);
+    if (c.splitImage && c.splitMode && c.splitMode !== 'none') {
+      drawSplitCover(ctx, c.image, c.splitImage, W, H, tr, c.splitMode);
+    } else {
+      drawCover(ctx, c.image, W, H, tr);
+    }
   };
+
+  const drawCurrent = () => drawClipImages(clip, progress);
 
   // Are we in a transition into the next clip?
   const next = clips[idx + 1];
   const remaining = clip.duration - local;
   if (next && clip.transition !== 'cut' && remaining < TRANSITION_DURATION) {
     const tp = 1 - remaining / TRANSITION_DURATION;
-    const drawNext = () => {
-      const tr = applyEffect(resolveEffect(next), 0);
-      drawCover(ctx, next.image, W, H, tr);
-    };
+    const drawNext = () => drawClipImages(next, 0);
     applyTransition(ctx, W, H, clip.transition, tp, drawCurrent, drawNext);
   } else {
     drawCurrent();
@@ -1529,12 +1608,28 @@ export function renderFrame(rc: RenderContext, t: number): void {
 function drawPlaceholder(ctx: CanvasRenderingContext2D, W: number, H: number) {
   ctx.save();
   ctx.fillStyle = 'rgba(255,255,255,0.65)';
-  ctx.font = '600 56px Inter, system-ui, sans-serif';
+  // Scale the font with the smaller canvas dim so the text doesn't look
+  // tiny on 1920×1080 nor blow out on 1080×1080.
+  const base = Math.min(W, H);
+  ctx.font = `600 ${Math.round(base * 0.055)}px Inter, system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Add or generate an image to begin', W / 2, H / 2 - 40);
-  ctx.font = '500 36px Inter, system-ui, sans-serif';
+  ctx.fillText('Add or generate an image to begin', W / 2, H / 2 - base * 0.04);
+  ctx.font = `500 ${Math.round(base * 0.034)}px Inter, system-ui, sans-serif`;
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
-  ctx.fillText('YouTube Shorts • 9:16 • 1080×1920', W / 2, H / 2 + 30);
+  // Pick the closest matching aspect-ratio tag so the placeholder reflects
+  // the user's current dims instead of always saying "9:16 1080×1920".
+  const ratio = W / H;
+  let bestId: AspectRatioId = '9:16';
+  let bestDiff = Infinity;
+  for (const key of Object.keys(ASPECT_RATIOS) as AspectRatioId[]) {
+    const info = ASPECT_RATIOS[key];
+    const diff = Math.abs(info.width / info.height - ratio);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestId = key;
+    }
+  }
+  ctx.fillText(ASPECT_RATIOS[bestId].tag, W / 2, H / 2 + base * 0.03);
   ctx.restore();
 }

@@ -357,7 +357,7 @@ export function ScriptPanel({
       <Divider flexItem sx={{ opacity: 0.3 }} />
 
       {/* ============== Sync mode + animation ============== */}
-      <Stack direction="row" spacing={1} alignItems="flex-start">
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
         <TextField
           select
           size="small"

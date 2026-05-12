@@ -32,6 +32,7 @@ import {
 import { getResolvedEffect } from '../engine/render';
 import { newEffectSeed } from '../engine/effectPicker';
 import { newCaptionSeed } from '../engine/captionAi';
+import { SplitScreenPanel } from './SplitScreenPanel';
 
 interface Props {
   clips: ImageClip[];
@@ -529,6 +530,16 @@ export function Timeline({
                 )}
               </Stack>
             )}
+
+            {/*
+              Split-screen editor. Self-contained mini panel that lets the
+              user attach a second image (upload or AI-generate) so the
+              renderer draws both halves side-by-side with the same effect.
+            */}
+            <SplitScreenPanel
+              clip={selected}
+              onChange={(patch) => onUpdate(selected.id, patch)}
+            />
           </Stack>
         </Box>
       )}

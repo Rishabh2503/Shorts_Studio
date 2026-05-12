@@ -119,7 +119,7 @@ export function MediaPanel({ onAddImage }: Props) {
         size="small"
       />
 
-      <Stack direction="row" spacing={1}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
         <TextField
           select
           size="small"

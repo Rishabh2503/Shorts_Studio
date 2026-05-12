@@ -17,13 +17,23 @@ import SubtitlesIcon from '@mui/icons-material/Subtitles';
 import { exportVideo, type ExportProgress, type ExportResult } from '../engine/export';
 import { totalDuration } from '../engine/render';
 import { filterFillerWords, buildCues, cuesToSRT } from '../engine/captionText';
-import type { ProjectState } from '../types';
+import { ASPECT_RATIOS, type ProjectState } from '../types';
 
 interface Props {
   project: ProjectState;
+  /**
+   * Visual variant.
+   *  - 'hero' (default): full-width gradient button with a moving sheen,
+   *    designed to sit just below the preview as the primary call-to-action.
+   *  - 'compact': dense pill that fits a toolbar / header row.
+   * Both variants open the exact same export dialog.
+   */
+  variant?: 'hero' | 'compact';
+  /** Override the displayed label. Useful for compact mode ("Export"). */
+  label?: string;
 }
 
-export function ExportButton({ project }: Props) {
+export function ExportButton({ project, variant = 'hero', label }: Props) {
   const [open, setOpen] = useState(false);
   const [progress, setProgress] = useState<ExportProgress>({
     phase: 'preparing',
@@ -53,17 +63,64 @@ export function ExportButton({ project }: Props) {
   }
 
   const disabled = project.clips.length === 0;
+  const isHero = variant === 'hero';
+  const buttonText = label ?? (busy ? 'Rendering…' : 'Render & Download');
+
+  // Animated sheen for the hero variant. A gradient ~3x the button's width
+  // slides horizontally on an infinite loop, giving the CTA a premium
+  // "this is the action" feel without distracting from the preview.
+  const heroSx = isHero
+    ? {
+        width: '100%',
+        py: 1.4,
+        fontSize: '1rem',
+        fontWeight: 700,
+        letterSpacing: 0.4,
+        borderRadius: 2.5,
+        color: '#fff',
+        textTransform: 'none',
+        position: 'relative',
+        overflow: 'hidden',
+        backgroundImage:
+          'linear-gradient(90deg, #7c3aed 0%, #22d3ee 33%, #ff3ea5 66%, #7c3aed 100%)',
+        backgroundSize: '300% 100%',
+        boxShadow: '0 10px 28px rgba(124,58,237,0.35), 0 0 0 1px rgba(255,255,255,0.06) inset',
+        animation: 'cta-shimmer 6s linear infinite',
+        '@keyframes cta-shimmer': {
+          '0%': { backgroundPosition: '0% 50%' },
+          '100%': { backgroundPosition: '300% 50%' }
+        },
+        '&:hover': {
+          backgroundImage:
+            'linear-gradient(90deg, #7c3aed 0%, #22d3ee 33%, #ff3ea5 66%, #7c3aed 100%)',
+          filter: 'brightness(1.08)',
+          boxShadow: '0 12px 32px rgba(124,58,237,0.5), 0 0 0 1px rgba(255,255,255,0.1) inset'
+        },
+        '&:focus-visible': {
+          outline: '2px solid #fff',
+          outlineOffset: 2
+        },
+        '&.Mui-disabled': {
+          color: 'rgba(255,255,255,0.55)',
+          opacity: 0.55
+        }
+      }
+    : {
+        textTransform: 'none' as const
+      };
 
   return (
     <>
       <Button
         variant="contained"
-        size="large"
-        startIcon={busy ? <CircularProgress size={18} color="inherit" /> : <MovieFilterIcon />}
+        size={isHero ? 'large' : 'medium'}
+        startIcon={busy ? <CircularProgress size={isHero ? 20 : 16} color="inherit" /> : <MovieFilterIcon />}
         onClick={handleExport}
         disabled={disabled || busy}
+        aria-label={busy ? 'Rendering video' : 'Render and download video'}
+        sx={heroSx}
       >
-        {busy ? 'Rendering…' : 'Render & Download'}
+        {buttonText}
       </Button>
 
       <Dialog
@@ -98,8 +155,10 @@ export function ExportButton({ project }: Props) {
             <Stack spacing={2} alignItems="center">
               <Box
                 sx={{
-                  width: 200,
-                  aspectRatio: '9 / 16',
+                  // Preview box matches the project's aspect ratio so a 16:9
+                  // export doesn't get squished into a 9:16 thumbnail.
+                  width: project.width >= project.height ? 320 : 200,
+                  aspectRatio: ASPECT_RATIOS[project.aspectRatio].css,
                   borderRadius: 2,
                   overflow: 'hidden',
                   border: '1px solid rgba(255,255,255,0.1)'

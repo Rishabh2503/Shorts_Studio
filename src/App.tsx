@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
+  Button,
   Container,
   FormControlLabel,
   IconButton,
+  Menu,
+  MenuItem,
   Paper,
   Slider,
   Stack,
@@ -18,8 +21,17 @@ import RepeatIcon from '@mui/icons-material/Repeat';
 import RepeatOnIcon from '@mui/icons-material/RepeatOn';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SubtitlesIcon from '@mui/icons-material/Subtitles';
+import AspectRatioIcon from '@mui/icons-material/AspectRatio';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { v4 as uuid } from 'uuid';
-import { DEFAULT_PROJECT, type ImageClip, type ProjectState } from './types';
+import {
+  ASPECT_RATIOS,
+  DEFAULT_PROJECT,
+  getCanvasDims,
+  type AspectRatioId,
+  type ImageClip,
+  type ProjectState
+} from './types';
 import { totalDuration } from './engine/render';
 import { newEffectSeed } from './engine/effectPicker';
 import { newCaptionSeed } from './engine/captionAi';
@@ -77,7 +89,18 @@ function AppInner() {
    * transport's loop toggle.
    */
   const [loopVideo, setLoopVideo] = useState(false);
+  /**
+   * Anchor for the aspect-ratio menu. Stored in state so the Menu component
+   * can mount/unmount cleanly and aria-expanded reflects the open state.
+   */
+  const [ratioMenuAnchor, setRatioMenuAnchor] = useState<HTMLElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  /**
+   * Second audio element — plays the background bed in parallel with the
+   * main track. Lives behind the same play/pause controls but ignores the
+   * transcript / fit-video sync since the *main* slot drives duration.
+   */
+  const audio2Ref = useRef<HTMLAudioElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastTickRef = useRef<number>(0);
   // Refs avoid re-creating the rAF loop every time `dur` changes — the loop
@@ -198,6 +221,25 @@ function AppInner() {
     // effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, dur, project.audio.volume, project.audio.src, project.audio.start, project.audio.syncMode]);
+
+  // Mirror the same play/pause + seek logic for the optional background track.
+  // Background audio always uses its own loop flag (so a short royalty-free
+  // bed can fill a long video) and seeks to its trim start, but it never
+  // affects project duration.
+  useEffect(() => {
+    const a = audio2Ref.current;
+    if (!a) return;
+    if (playing && dur > 0 && project.audio2.src) {
+      a.volume = project.audio2.volume;
+      const audioT = project.audio2.start + Math.min(time, dur);
+      try { a.currentTime = audioT; } catch { /* ignore */ }
+      a.loop = project.audio2.syncMode === 'loop';
+      a.play().catch(() => { /* autoplay may be blocked */ });
+    } else {
+      a.pause();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, dur, project.audio2.volume, project.audio2.src, project.audio2.start, project.audio2.syncMode]);
 
   // Hard-stop the audio when its trim end is reached (fitAudio / fitVideo).
   // Without this, the <audio loop> attribute would replay past audio.end.
@@ -343,19 +385,19 @@ function AppInner() {
   }
 
   /**
-   * Seek the playhead and re-sync the audio element so the trim window is
-   * respected. Called by the restart button and the scrub slider.
+   * Seek the playhead and re-sync the audio elements so the trim windows
+   * are respected. Called by the restart button and the scrub slider.
    */
   function seekTo(t: number) {
     const clamped = Math.max(0, Math.min(dur, t));
     setTime(clamped);
     const a = audioRef.current;
     if (a) {
-      try {
-        a.currentTime = project.audio.start + clamped;
-      } catch {
-        /* some browsers throw on cross-origin seeking; ignore */
-      }
+      try { a.currentTime = project.audio.start + clamped; } catch { /* ignore */ }
+    }
+    const b = audio2Ref.current;
+    if (b) {
+      try { b.currentTime = project.audio2.start + clamped; } catch { /* ignore */ }
     }
   }
 
@@ -604,21 +646,89 @@ function AppInner() {
     [toast]
   );
 
+  /**
+   * Aspect-ratio pill + captions toggle. Rendered in two places:
+   *   - header right-stack on desktop (md+)
+   *   - dedicated control bar directly above the preview on mobile (xs/sm)
+   * Kept as a single fragment so the two surfaces never drift out of sync.
+   */
+  const formatControls = (
+    <>
+      <Tooltip
+        title={'Output canvas size \u2014 9:16 for Shorts/Reels, 16:9 for YouTube landscape, 1:1 square, 4:5 portrait, 4:3 classic.'}
+        placement="bottom"
+        arrow
+        enterDelay={400}
+        componentsProps={{ tooltip: { sx: { maxWidth: 260 } } }}
+      >
+        <Button
+          size="small"
+          variant="outlined"
+          color="secondary"
+          onClick={(e) => setRatioMenuAnchor(e.currentTarget)}
+          startIcon={<AspectRatioIcon fontSize="small" />}
+          endIcon={<KeyboardArrowDownIcon fontSize="small" />}
+          aria-haspopup="menu"
+          aria-expanded={ratioMenuAnchor ? 'true' : 'false'}
+          sx={{
+            textTransform: 'none',
+            borderRadius: 999,
+            px: 1.5,
+            fontWeight: 600,
+            borderColor: 'rgba(167,139,250,0.4)',
+            '&:hover': { borderColor: '#a78bfa', background: 'rgba(124,58,237,0.08)' }
+          }}
+        >
+          {ASPECT_RATIOS[project.aspectRatio].label}
+        </Button>
+      </Tooltip>
+      <Tooltip
+        title="AI-styled animated captions burned into every clip."
+        placement="bottom"
+        arrow
+        enterDelay={400}
+      >
+        <FormControlLabel
+          control={
+            <Switch
+              color="secondary"
+              checked={project.captionsEnabled}
+              onChange={(_, v) =>
+                setProject((p) => ({ ...p, captionsEnabled: v }))
+              }
+              inputProps={{ 'aria-label': 'Toggle animated captions' }}
+            />
+          }
+          label={
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              <SubtitlesIcon fontSize="small" />
+              <Typography variant="body2">Captions</Typography>
+            </Stack>
+          }
+          sx={{ ml: 0, mr: 0, userSelect: 'none' }}
+        />
+      </Tooltip>
+    </>
+  );
+
   return (
     <Box className="aurora" sx={{ minHeight: '100vh' }}>
       <DropZone onImage={(url) => addImage(url)} onAudio={handleAudioDrop} />
-      {/* Hidden audio element used during preview only. The exporter has its own. */}
+      {/* Hidden audio elements used during preview only. The exporter has its own. */}
       {project.audio.src && (
         <audio ref={audioRef} src={project.audio.src} preload="auto" />
       )}
+      {project.audio2.src && (
+        <audio ref={audio2Ref} src={project.audio2.src} preload="auto" />
+      )}
 
-      <Container maxWidth="xl" sx={{ py: 3 }}>
+      <Container maxWidth="xl" sx={{ py: { xs: 2, sm: 3 }, px: { xs: 1.5, sm: 3 } }}>
         <Stack
           direction={{ xs: 'column', md: 'row' }}
           alignItems={{ xs: 'flex-start', md: 'center' }}
           justifyContent="space-between"
           spacing={2}
-          mb={3}
+          mb={{ xs: 2, sm: 3 }}
         >
           <Stack direction="row" alignItems="center" spacing={1.5}>
             <Box
@@ -637,7 +747,7 @@ function AppInner() {
               <AutoAwesomeIcon sx={{ color: '#fff' }} />
             </Box>
             <Box>
-              <Typography variant="h4" sx={{ lineHeight: 1 }}>
+              <Typography variant="h4" sx={{ lineHeight: 1, fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>
                 Shorts Studio
               </Typography>
               <Typography variant="caption" color="text.secondary">
@@ -645,29 +755,52 @@ function AppInner() {
               </Typography>
             </Box>
           </Stack>
-          <Stack direction="row" alignItems="center" spacing={2}>
-            <Tooltip title="Toggles AI-styled, animated captions on top of every clip. Each clip's caption gets its own font, color, and animation chosen from the prompt.">
-              <FormControlLabel
-                control={
-                  <Switch
-                    color="secondary"
-                    checked={project.captionsEnabled}
-                    onChange={(_, v) =>
-                      setProject((p) => ({ ...p, captionsEnabled: v }))
-                    }
-                  />
-                }
-                label={
-                  <Stack direction="row" spacing={0.75} alignItems="center">
-                    <SubtitlesIcon fontSize="small" />
-                    <Typography variant="body2">Animated Captions</Typography>
-                  </Stack>
-                }
-                sx={{ ml: 0, userSelect: 'none' }}
-              />
-            </Tooltip>
-            <ExportButton project={project} />
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={{ xs: 1, sm: 1.5 }}
+            flexWrap="wrap"
+            useFlexGap
+            sx={{
+              width: { xs: '100%', md: 'auto' },
+              // Hidden on phones / small tablets \u2014 the same controls
+              // appear as a dedicated bar above the preview on mobile to
+              // keep the header readable and avoid overlapping buttons.
+              display: { xs: 'none', md: 'flex' }
+            }}
+          >
+            {formatControls}
           </Stack>
+          {/*
+            Mobile-only aspect-ratio menu (rendered outside the hidden
+            stack so the popover anchor still mounts on phones).
+          */}
+          <Menu
+            anchorEl={ratioMenuAnchor}
+            open={!!ratioMenuAnchor}
+            onClose={() => setRatioMenuAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+          >
+            {(Object.keys(ASPECT_RATIOS) as AspectRatioId[]).map((id) => (
+              <MenuItem
+                key={id}
+                selected={id === project.aspectRatio}
+                onClick={() => {
+                  const dims = getCanvasDims(id);
+                  setProject((p) => ({
+                    ...p,
+                    aspectRatio: id,
+                    width: dims.width,
+                    height: dims.height
+                  }));
+                  setRatioMenuAnchor(null);
+                }}
+              >
+                {ASPECT_RATIOS[id].label}
+              </MenuItem>
+            ))}
+          </Menu>
         </Stack>
 
         <Stack
@@ -675,41 +808,65 @@ function AppInner() {
           spacing={2}
           alignItems="stretch"
         >
-          {/* Left: Media + Audio */}
-          <Stack spacing={2} sx={{ flex: '0 0 320px' }}>
-            <Paper sx={{ p: 2 }}>
+          {/* Left: Media + Audio. Full-width on phone/tablet, fixed 320px on lg+. */}
+          <Stack
+            spacing={2}
+            sx={{
+              flex: { xs: '1 1 auto', lg: '0 0 320px' },
+              width: { xs: '100%', lg: 320 },
+              minWidth: 0
+            }}
+          >
+            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
               <MediaPanel onAddImage={addImage} />
             </Paper>
-            <Paper sx={{ p: 2 }}>
+            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
               <AudioPanel
                 audio={project.audio}
                 onChange={(audio) => setProject((p) => ({ ...p, audio }))}
                 onRestart={() => seekTo(0)}
               />
             </Paper>
-            <Paper sx={{ p: 2 }}>
-              <ScriptPanel
-                script={project.script}
-                onChange={(script) => setProject((p) => ({ ...p, script }))}
-                hasAudio={!!project.audio.src}
-                hasPeaks={(audioPeaks?.length ?? 0) > 0}
-                onTranscribe={handleTranscribe}
-                onSyncPastedScript={handleSyncPastedScript}
-                onClearCache={handleClearCache}
-                transcribing={transcribing}
-                transcribeProgress={transcribeProgress}
-                transcribeError={transcribeError}
-                onEditTranscript={() => setTranscriptEditorOpen(true)}
-                onDownloadSRT={handleDownloadSRT}
+            {/*
+              Second (background) audio track. Plays in parallel with the main
+              voiceover so creators can layer a royalty-free music bed and
+              eliminate copyright strikes — the transcript still comes only
+              from the main track.
+            */}
+            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
+              <AudioPanel
+                audio={project.audio2}
+                onChange={(audio2) => setProject((p) => ({ ...p, audio2 }))}
+                role="background"
               />
             </Paper>
           </Stack>
 
           {/* Center: Preview */}
           <Stack spacing={2} sx={{ flex: '1 1 auto', minWidth: 0 }}>
+            {/*
+              Mobile-only format bar. The aspect-ratio pill + captions toggle
+              live here on phones/small tablets because the header runs out
+              of horizontal room \u2014 putting them right above the preview
+              keeps the controls next to what they affect.
+            */}
             <Paper
               sx={{
-                p: 2,
+                display: { xs: 'flex', md: 'none' },
+                p: 1,
+                px: 1.5,
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 1,
+                flexWrap: 'wrap',
+                borderRadius: 2
+              }}
+            >
+              {formatControls}
+            </Paper>
+            <Paper
+              sx={{
+                p: { xs: 1.5, sm: 2 },
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -719,8 +876,15 @@ function AppInner() {
               <Box
                 sx={{
                   width: '100%',
-                  maxWidth: 360,
-                  aspectRatio: '9 / 16',
+                  // Larger landscape ratios get more room on wider screens so
+                  // the user actually sees the framing they'll export.
+                  maxWidth: {
+                    xs: '100%',
+                    sm: project.aspectRatio === '9:16' || project.aspectRatio === '4:5' ? 320 : 520,
+                    md: project.aspectRatio === '9:16' || project.aspectRatio === '4:5' ? 360 : 640,
+                    lg: project.aspectRatio === '9:16' || project.aspectRatio === '4:5' ? 360 : 720
+                  },
+                  aspectRatio: ASPECT_RATIOS[project.aspectRatio].css,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center'
@@ -798,9 +962,25 @@ function AppInner() {
                   {time.toFixed(1)}s / {dur.toFixed(1)}s
                 </Typography>
               </Stack>
+
+              {/*
+                Hero Render & Download button. Lives right under the preview
+                transport so users hit it the moment they're happy with what
+                they see, instead of hunting back up to the header.
+              */}
+              <Box sx={{ width: '100%', mt: 0.5 }}>
+                <ExportButton project={project} />
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: 'block', textAlign: 'center', mt: 0.75 }}
+                >
+                  Records in real-time so audio stays perfectly in sync.
+                </Typography>
+              </Box>
             </Paper>
 
-            <Paper sx={{ p: 2 }}>
+            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
               <Timeline
                 clips={project.clips}
                 selectedId={selectedId}
@@ -812,13 +992,37 @@ function AppInner() {
                 captionsEnabled={project.captionsEnabled}
               />
             </Paper>
+
+            {/*
+              Script / captions panel. Pulled out of the left sidebar so the
+              left column doesn't tower over the (often portrait) preview and
+              create dead space \u2014 keeping it in the main column also makes
+              the editing flow read top-to-bottom: preview \u2192 render \u2192
+              timeline \u2192 captions.
+            */}
+            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
+              <ScriptPanel
+                script={project.script}
+                onChange={(script) => setProject((p) => ({ ...p, script }))}
+                hasAudio={!!project.audio.src}
+                hasPeaks={(audioPeaks?.length ?? 0) > 0}
+                onTranscribe={handleTranscribe}
+                onSyncPastedScript={handleSyncPastedScript}
+                onClearCache={handleClearCache}
+                transcribing={transcribing}
+                transcribeProgress={transcribeProgress}
+                transcribeError={transcribeError}
+                onEditTranscript={() => setTranscriptEditorOpen(true)}
+                onDownloadSRT={handleDownloadSRT}
+              />
+            </Paper>
           </Stack>
         </Stack>
 
         <Box mt={4} textAlign="center">
           <Typography variant="caption" color="text.secondary">
-            Built with React + Vite + TypeScript + Tailwind + MUI • Renders 1080×1920 @ 30fps •
-            Output: WebM (VP9 + Opus). Drop into YouTube Shorts directly.
+            Built with React + Vite + TypeScript + Tailwind + MUI • Renders {project.width}×{project.height} @ {project.fps}fps •
+            Output: WebM (VP9 + Opus). Drop into YouTube directly.
           </Typography>
         </Box>
       </Container>

@@ -85,38 +85,75 @@ export async function exportVideo(opts: ExportOptions): Promise<ExportResult> {
   if (!ctx2d) throw new Error('Canvas 2D context unavailable.');
   const ctx: CanvasRenderingContext2D = ctx2d;
 
-  // Setup audio graph if present
-  let audioCtx: AudioContext | null = null;
-  let audioEl: HTMLAudioElement | null = null;
-  let audioDest: MediaStreamAudioDestinationNode | null = null;
-  if (project.audio.src) {
-    audioCtx = new AudioContext();
-    audioEl = new Audio();
-    audioEl.crossOrigin = 'anonymous';
-    audioEl.src = project.audio.src;
-    // Loop only in 'loop' sync mode — the other modes want the audio to
-    // play exactly once across the trim window.
-    audioEl.loop = project.audio.syncMode === 'loop';
-    audioEl.volume = project.audio.volume;
+  // Setup audio graph if present. Two tracks may be present: the main one
+  // (transcript source) and an optional second one (background bed). Both
+  // are routed through their own gain nodes into the same MediaStream
+  // destination so they're mixed into the recorded WebM.
+  //
+  // We track the shared graph in an `audio` object instead of two `let`
+  // bindings because TS's control-flow analysis doesn't follow `let`
+  // mutations across closure calls — using a single object reference keeps
+  // narrowing intact downstream.
+  const audio: {
+    ctx: AudioContext | null;
+    dest: MediaStreamAudioDestinationNode | null;
+    els: HTMLAudioElement[];
+  } = { ctx: null, dest: null, els: [] };
+
+  /**
+   * Build a single source/gain branch for one ProjectAudio slot. Resolves
+   * when the element is ready to play. Returns null if the slot is empty
+   * (so a missing audio2 doesn't block export). Lazily initializes the
+   * shared AudioContext / destination on first call.
+   */
+  async function attachAudio(
+    slot: ProjectState['audio'],
+    label: 'main' | 'background'
+  ): Promise<HTMLAudioElement | null> {
+    if (!slot.src) return null;
+    if (!audio.ctx) audio.ctx = new AudioContext();
+    if (!audio.dest) audio.dest = audio.ctx.createMediaStreamDestination();
+    const aCtx = audio.ctx;
+    const aDest = audio.dest;
+    const el = new Audio();
+    el.crossOrigin = 'anonymous';
+    el.src = slot.src;
+    el.loop = slot.syncMode === 'loop';
+    el.volume = slot.volume;
     await new Promise<void>((res, rej) => {
-      audioEl!.oncanplaythrough = () => res();
-      audioEl!.onerror = () => rej(new Error('Audio failed to load.'));
-      audioEl!.load();
+      el.oncanplaythrough = () => res();
+      el.onerror = () => rej(new Error(`${label} audio failed to load.`));
+      el.load();
     });
-    const source = audioCtx.createMediaElementSource(audioEl);
-    const gain = audioCtx.createGain();
-    gain.gain.value = project.audio.volume;
-    audioDest = audioCtx.createMediaStreamDestination();
+    const source = aCtx.createMediaElementSource(el);
+    const gain = aCtx.createGain();
+    gain.gain.value = slot.volume;
     source.connect(gain);
-    gain.connect(audioDest);
+    gain.connect(aDest);
+    audio.els.push(el);
+    return el;
+  }
+
+  const audioElMain = await attachAudio(project.audio, 'main');
+  // Background is best-effort — if it fails to load, we still export the
+  // main track + video so the user isn't blocked by a broken bed.
+  let audioElBg: HTMLAudioElement | null = null;
+  try {
+    audioElBg = await attachAudio(project.audio2, 'background');
+  } catch (e) {
+    onProgress?.({
+      phase: 'preparing',
+      progress: 0,
+      message: `Background audio skipped: ${(e as Error).message}`
+    });
   }
 
   // Compose stream
   const fps = project.fps;
   const videoStream = canvas.captureStream(fps);
   const tracks = videoStream.getTracks();
-  if (audioDest) {
-    audioDest.stream.getAudioTracks().forEach((t) => tracks.push(t));
+  if (audio.dest) {
+    audio.dest.stream.getAudioTracks().forEach((t) => tracks.push(t));
   }
   const stream = new MediaStream(tracks);
 
@@ -136,25 +173,34 @@ export async function exportVideo(opts: ExportOptions): Promise<ExportResult> {
   });
 
   recorder.start(100);
-  if (audioEl) {
-    // Start at the user's chosen trim window, not file start.
-    audioEl.currentTime = project.audio.start;
-    // For non-loop modes, hard-stop at the end of the trim window so no
-    // extra audio leaks into the export beyond what the user selected.
-    if (project.audio.syncMode !== 'loop' && project.audio.end != null) {
-      const stopAt = project.audio.end;
+  // Seek + play each attached audio source. The main slot drives the trim
+  // logic that hard-stops at audio.end for non-loop modes; the background
+  // slot just plays from its own trim start (looped or not per its sync
+  // mode) until the recorder stops.
+  async function startSlot(
+    el: HTMLAudioElement | null,
+    slot: ProjectState['audio']
+  ) {
+    if (!el) return;
+    el.currentTime = slot.start;
+    if (slot.syncMode !== 'loop' && slot.end != null) {
+      const stopAt = slot.end;
       const onTU = () => {
-        if (audioEl && audioEl.currentTime >= stopAt - 0.02) {
-          audioEl.pause();
-          audioEl.removeEventListener('timeupdate', onTU);
+        if (el.currentTime >= stopAt - 0.02) {
+          el.pause();
+          el.removeEventListener('timeupdate', onTU);
         }
       };
-      audioEl.addEventListener('timeupdate', onTU);
+      el.addEventListener('timeupdate', onTU);
     }
-    await audioEl.play().catch(() => {
+    await el.play().catch(() => {
       /* ignore — silent video still records */
     });
   }
+  await Promise.all([
+    startSlot(audioElMain, project.audio),
+    startSlot(audioElBg, project.audio2)
+  ]);
 
   onProgress?.({ phase: 'recording', progress: 0, message: 'Recording…' });
 
@@ -187,9 +233,14 @@ export async function exportVideo(opts: ExportOptions): Promise<ExportResult> {
 
   onProgress?.({ phase: 'finalizing', progress: 0.98, message: 'Finalizing video…' });
   recorder.stop();
-  if (audioEl) audioEl.pause();
+  for (const el of audio.els) el.pause();
   await finished;
-  audioCtx?.close().catch(() => {});
+  // Cleanup. Reading `audio.ctx` through the wrapper object preserves the
+  // narrowed type — using a bare `let audioCtx` would have left TS unable
+  // to track mutations performed inside `attachAudio`.
+  if (audio.ctx) {
+    audio.ctx.close().catch(() => {});
+  }
 
   const blob = new Blob(chunks, { type: mimeType });
   const url = URL.createObjectURL(blob);
