@@ -6,12 +6,10 @@
   "trailingSlash": false,
   "cleanUrls": true,
 
-  "//rewrites": "SPA fallback. Anything that doesn't match a static file lands on index.html so client-side routes work. Vite already produces hashed asset filenames, so this is safe.",
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
 
-  "//headers": "Caching strategy: hashed assets (under /assets/) are immutable for a year; HTML and discovery files (robots, sitemap, manifest) are short-lived so updates roll out instantly. Security headers harden against common XSS / clickjacking / MIME-sniffing attacks.",
   "headers": [
     {
       "source": "/assets/(.*)",
