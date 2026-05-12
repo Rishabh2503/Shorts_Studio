@@ -1,0 +1,30 @@
+# Robots policy for Shorts Studio.
+# Everything is public; we just want to point crawlers at the sitemap.
+
+User-agent: *
+Allow: /
+
+# Block crawl of internal API proxies and the heavy ONNX wasm asset \u2014
+# crawlers indexing those is pure bandwidth waste.
+Disallow: /api/
+Disallow: /assets/*.wasm$
+
+# Be explicit about good actors.
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+# Some AI crawlers are heavy and provide no SEO value back. Opt-out is
+# voluntary on their side, but the directive is the right signal.
+User-agent: GPTBot
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+Sitemap: https://shorts-studio.vercel.app/sitemap.xml

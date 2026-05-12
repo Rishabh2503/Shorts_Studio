@@ -1,0 +1,36 @@
+{
+  "name": "Shorts Studio — AI YouTube Shorts Maker",
+  "short_name": "Shorts Studio",
+  "description": "Free AI YouTube Shorts, Reels, and TikTok video maker that runs entirely in your browser.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#7c3aed",
+  "lang": "en-US",
+  "dir": "ltr",
+  "categories": ["video", "productivity", "entertainment", "multimedia"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New project",
+      "short_name": "New",
+      "description": "Start a fresh Shorts project",
+      "url": "/?new=1"
+    }
+  ]
+}

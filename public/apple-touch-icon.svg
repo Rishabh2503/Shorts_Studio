@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" fill="none">
+  <!--
+    Apple-touch-icon. iOS auto-applies its own rounded mask, but a baked-in
+    rounded square + extra padding looks better when the device skips that
+    treatment (e.g. older Safari, some Android home screens).
+  -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7c3aed" />
+      <stop offset="60%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#ff3ea5" />
+    </linearGradient>
+  </defs>
+  <rect width="180" height="180" rx="40" fill="url(#g)" />
+  <path
+    d="M90 36 L100.8 75.6 L140 90 L100.8 104.4 L90 144 L79.2 104.4 L40 90 L79.2 75.6 Z"
+    fill="#ffffff"
+  />
+  <circle cx="136" cy="48" r="6" fill="#ffffff" opacity="0.95" />
+  <circle cx="46" cy="130" r="4.5" fill="#ffffff" opacity="0.85" />
+</svg>

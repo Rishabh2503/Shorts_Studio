@@ -26,6 +26,30 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-05-12-seo-pwa',
+    date: 'May 12, 2026',
+    title: 'Installable app, social previews & faster loads',
+    body:
+      'Shorts Studio is now installable to your home screen, has a polished brand favicon, and ships with rich search-engine + social-card metadata. Initial page loads are also lighter thanks to code-splitting.',
+    kind: 'improvement'
+  },
+  {
+    id: '2026-05-12-autosave',
+    date: 'May 12, 2026',
+    title: 'Autosave \u2014 your project survives a refresh',
+    body:
+      'Every edit is now saved to your browser locally. Accidental refresh? Browser crash? Closed the tab? Your timeline, captions, and settings come back exactly how you left them.',
+    kind: 'feature'
+  },
+  {
+    id: '2026-05-12-help-bell',
+    date: 'May 12, 2026',
+    title: 'Notifications bell + user guide',
+    body:
+      'A new bell icon highlights fresh rollouts, and a "?" icon next to it opens a full user guide with examples for every feature \u2014 perfect for first-time visitors.',
+    kind: 'feature'
+  },
+  {
     id: '2026-05-12-ui-polish',
     date: 'May 12, 2026',
     title: 'Polished UI: animated render CTA + mobile control bar',

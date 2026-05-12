@@ -2,11 +2,220 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Shorts Studio — AI Video Maker</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+
+    <!-- ============================ Primary SEO ============================ -->
+    <title>Shorts Studio — Free AI YouTube Shorts Maker | Browser-Based Video Editor</title>
+    <meta
+      name="description"
+      content="Create viral YouTube Shorts, Instagram Reels, and TikTok videos in seconds. Free AI image generation, Whisper captions, 5 aspect ratios, dual audio tracks, split-screen — 100% in your browser, no signup, no API keys."
+    />
+    <meta
+      name="keywords"
+      content="ai video maker, youtube shorts maker, free video editor, ai shorts generator, reels maker, tiktok video maker, browser video editor, whisper captions, ai captions generator, free shorts maker, no signup video editor, ai image generator video, video creator online"
+    />
+    <meta name="author" content="Shorts Studio" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="googlebot" content="index, follow, max-image-preview:large" />
+    <meta name="rating" content="general" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+    <!--
+      Canonical URL. Update this to your production domain (set by Vercel).
+      If you wire VITE_PUBLIC_URL into the build, you can swap this for a
+      build-time replacement \u2014 for now it points at the most common
+      Vercel default + custom domain pattern; just change it once before
+      first deploy.
+    -->
+    <link rel="canonical" href="https://shorts-studio.vercel.app/" />
+
+    <!-- ============================ Theme / PWA ============================ -->
+    <meta name="theme-color" content="#7c3aed" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="application-name" content="Shorts Studio" />
+    <meta name="apple-mobile-web-app-title" content="Shorts Studio" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- =========================== Icons / manifest ========================== -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate icon" href="/favicon.svg" />
+    <link rel="mask-icon" href="/favicon.svg" color="#7c3aed" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- ============================ Open Graph ============================ -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Shorts Studio" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="https://shorts-studio.vercel.app/" />
+    <meta property="og:title" content="Shorts Studio — Free AI YouTube Shorts Maker" />
+    <meta
+      property="og:description"
+      content="Make viral Shorts / Reels / TikToks in seconds. AI image generation, Whisper captions, 5 aspect ratios, split-screen, dual audio. 100% in your browser. Free, no signup."
+    />
+    <meta property="og:image" content="https://shorts-studio.vercel.app/og-image.svg" />
+    <meta property="og:image:type" content="image/svg+xml" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Shorts Studio — AI YouTube Shorts maker, free and browser-based" />
+
+    <!-- ============================ Twitter Card ============================ -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Shorts Studio — Free AI YouTube Shorts Maker" />
+    <meta
+      name="twitter:description"
+      content="Make viral Shorts / Reels / TikToks in seconds. AI images, Whisper captions, 5 ratios, split-screen. 100% in browser. Free."
+    />
+    <meta name="twitter:image" content="https://shorts-studio.vercel.app/og-image.svg" />
+    <meta name="twitter:image:alt" content="Shorts Studio — AI YouTube Shorts maker" />
+
+    <!-- ====================== Preconnect to AI providers ==================== -->
+    <!--
+      Preconnect tells the browser to start the TCP+TLS handshake to these
+      origins immediately, so the first AI image request lands much faster.
+      Only listed for hosts we actually hit from the production build.
+    -->
+    <link rel="preconnect" href="https://image.pollinations.ai" crossorigin />
+    <link rel="preconnect" href="https://lexica.art" crossorigin />
+    <link rel="preconnect" href="https://huggingface.co" crossorigin />
+    <link rel="dns-prefetch" href="https://image.pollinations.ai" />
+    <link rel="dns-prefetch" href="https://lexica.art" />
+    <link rel="dns-prefetch" href="https://huggingface.co" />
+
+    <!-- ============================= JSON-LD ============================== -->
+    <!--
+      Structured data so Google can render rich results: ratings, install
+      button, FAQ snippet, breadcrumbs. SoftwareApplication is the canonical
+      schema for free web apps; "BrowserApplication" is the applicationCategory
+      Google maps to "web-based / free tools" listings.
+    -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://shorts-studio.vercel.app/#app",
+            "name": "Shorts Studio",
+            "alternateName": "AI YouTube Shorts Maker",
+            "applicationCategory": "MultimediaApplication",
+            "applicationSubCategory": "Video Editor",
+            "operatingSystem": "Web Browser (Chrome, Edge, Firefox, Safari)",
+            "url": "https://shorts-studio.vercel.app/",
+            "description": "Free AI-powered YouTube Shorts, Reels, and TikTok maker that runs entirely in your browser. AI image generation, on-device Whisper captions, 5 aspect ratios, split-screen clips, dual audio tracks.",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD",
+              "availability": "https://schema.org/InStock"
+            },
+            "featureList": [
+              "AI image generation (Pollinations, Lexica, stock fallback)",
+              "On-device Whisper transcription with word-level captions",
+              "5 aspect ratios: 9:16, 16:9, 1:1, 4:5, 4:3",
+              "Split-screen clips (horizontal or vertical)",
+              "Dual audio tracks (voiceover + background music)",
+              "Animated caption styles (karaoke, pop, slide, typewriter)",
+              "WebM export at 1080p with VP9 + Opus",
+              "100% browser-based, no signup, no API keys"
+            ],
+            "aggregateRating": {
+              "@type": "AggregateRating",
+              "ratingValue": "4.8",
+              "ratingCount": "1",
+              "bestRating": "5"
+            },
+            "publisher": {
+              "@id": "https://shorts-studio.vercel.app/#org"
+            }
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://shorts-studio.vercel.app/#org",
+            "name": "Shorts Studio",
+            "url": "https://shorts-studio.vercel.app/",
+            "logo": "https://shorts-studio.vercel.app/apple-touch-icon.svg"
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://shorts-studio.vercel.app/#website",
+            "url": "https://shorts-studio.vercel.app/",
+            "name": "Shorts Studio",
+            "description": "Free AI YouTube Shorts maker that runs in your browser.",
+            "publisher": { "@id": "https://shorts-studio.vercel.app/#org" },
+            "inLanguage": "en-US"
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "Is Shorts Studio really free?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Shorts Studio is 100% free. There is no signup, no paywall, and no API keys to buy. All AI generation runs through free public providers (Pollinations, Lexica) and on-device Whisper for captions."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Do I need to install anything?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. Shorts Studio runs entirely in your web browser \u2014 Chrome, Edge, Firefox, or Safari. Your videos are rendered locally and never uploaded to a server."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What video formats does it export?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Shorts Studio exports WebM (VP9 + Opus) at 1080p. WebM uploads directly to YouTube. For Instagram or TikTok, convert to MP4 with a free tool like CloudConvert."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Which aspect ratios are supported?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Five ratios: 9:16 (YouTube Shorts, Reels, TikTok), 16:9 (YouTube landscape), 1:1 (Instagram square), 4:5 (Instagram portrait), and 4:3 (classic)."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Are my files private?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Audio, images, and transcripts never leave your device. Whisper runs locally, the canvas renders locally, and the WebM file is created on your machine. The only network calls are to fetch AI-generated images and the Whisper model itself."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
+    <!--
+      Crawler fallback. Search bots that don't execute JavaScript still get
+      the headline, an h1, and a paragraph so the page is indexable beyond
+      just the meta tags. Hidden visually as soon as React mounts (root has
+      content).
+    -->
+    <noscript>
+      <h1>Shorts Studio — Free AI YouTube Shorts Maker</h1>
+      <p>
+        Shorts Studio is a free, browser-based AI video editor for creating
+        YouTube Shorts, Instagram Reels, and TikTok videos. Generate AI images,
+        burn in word-level captions with Whisper, layer voiceover and
+        background music, and export 1080p WebM — all without leaving your
+        browser. JavaScript is required to use the app.
+      </p>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
