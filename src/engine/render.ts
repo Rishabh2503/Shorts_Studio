@@ -126,6 +126,88 @@ export function totalDuration(clips: ImageClip[]): number {
   return clips.reduce((s, c) => s + c.duration, 0);
 }
 
+/**
+ * Drive the play/pause/seek state of every video-backed clip in the
+ * project. Called once per animation frame BEFORE renderFrame so the
+ * underlying HTMLVideoElement is already showing the right frame by the
+ * time the renderer asks it to paint to canvas.
+ *
+ * Why not seek per frame? Setting `video.currentTime` flushes the decoder
+ * pipeline; doing that 30+ times a second on a real video file produces
+ * the stutter / freezing users were reporting. Instead we let the video
+ * element play natively at 1x while its clip is active and only correct
+ * for drift when wall-clock and source time diverge by more than ~300ms.
+ *
+ * When the timeline is paused (e.g. user is scrubbing), videos are paused
+ * and seeked precisely so the canvas reflects the playhead.
+ */
+export function syncVideoPlayback(
+  clips: LoadedClip[],
+  time: number,
+  isPlaying: boolean
+): void {
+  let acc = 0;
+  for (const clip of clips) {
+    const start = acc;
+    const end = acc + clip.duration;
+    acc = end;
+    if (clip.kind !== 'video' || !clip.video) continue;
+    const v = clip.video;
+    const vStart = clip.videoStart ?? 0;
+    const vEnd =
+      clip.videoEnd ?? (isFinite(v.duration) ? v.duration : clip.duration);
+    const isActive = time >= start && time < end;
+    // Source-video time the playhead corresponds to. Clip plays from
+    // vStart — every second of timeline advances source-time by 1s so
+    // the user's footage plays at native speed.
+    const localTime = Math.max(0, Math.min(clip.duration, time - start));
+    const target = Math.max(vStart, Math.min(vEnd, vStart + localTime));
+
+    if (!isActive) {
+      // Out of range — pause and rewind to start so the next entry into
+      // this clip begins from the correct frame.
+      if (!v.paused) v.pause();
+      if (Math.abs(v.currentTime - vStart) > 0.1) {
+        try {
+          v.currentTime = vStart;
+        } catch {
+          /* element may not be seekable yet */
+        }
+      }
+      continue;
+    }
+
+    if (isPlaying) {
+      // Active clip during playback: ensure video is playing, correct
+      // only when drift is large enough that the user would notice.
+      if (Math.abs(v.currentTime - target) > 0.3) {
+        try {
+          v.currentTime = target;
+        } catch {
+          /* swallow — still play, drift will self-correct */
+        }
+      }
+      if (v.paused) {
+        // .play() returns a promise that rejects on autoplay-policy
+        // failures; we ignore because the canvas already shows the
+        // poster as a fallback.
+        v.play().catch(() => {});
+      }
+    } else {
+      // Active clip while paused (scrubbing): pause and snap to the
+      // exact playhead so the canvas frame matches the user's position.
+      if (!v.paused) v.pause();
+      if (Math.abs(v.currentTime - target) > 0.05) {
+        try {
+          v.currentTime = target;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+}
+
 /** Easing helpers */
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
@@ -1650,28 +1732,18 @@ export function renderFrame(rc: RenderContext, t: number): void {
    * each image is cover-fit into its half. Both halves share the clip's
    * effect so motion looks coherent across the divider.
    *
-   * For `kind: 'video'` clips we seek the backing HTMLVideoElement to the
-   * matching point inside its trim window and draw the live frame instead
-   * of the still poster. The seek is best-effort \u2014 the video may not have
-   * decoded the requested frame yet, in which case `drawImage` simply
-   * paints whatever frame the decoder is currently holding (which is what
-   * users expect for a real-time export anyway).\n   */
+   * For `kind: 'video'` clips we just paint whatever frame the underlying
+   * HTMLVideoElement is currently showing. Playback timing is handled
+   * separately by `syncVideoPlayback()` (which uses native .play() so the
+   * decoder isn't slammed with per-frame seeks — that was the source of
+   * the lag / stop-and-go behavior users reported).
+   */
   const drawClipImages = (c: LoadedClip, p: number) => {
     const tr = applyEffect(resolveEffect(c), p);
-    // Video-backed clip: pick the trimmed source-time and seek the element.
+    // Video-backed clip: draw the live frame from the video element. We
+    // fall back to the poster image when the video isn't ready yet so the
+    // first frame after preload doesn't flash black.
     if (c.kind === 'video' && c.video && c.video.readyState >= 2) {
-      const vStart = c.videoStart ?? 0;
-      const vEnd = c.videoEnd ?? (isFinite(c.video.duration) ? c.video.duration : c.duration);
-      const target = vStart + (vEnd - vStart) * Math.max(0, Math.min(1, p));
-      // Only seek when we're noticeably off \u2014 setting currentTime every
-      // frame trashes the decoder pipeline on Safari and causes stutter.
-      if (Math.abs(c.video.currentTime - target) > 1 / 24) {
-        try {
-          c.video.currentTime = target;
-        } catch {
-          /* ignore \u2014 element may not be ready for seek yet */
-        }
-      }
       drawCover(ctx, c.video, W, H, tr);
       return;
     }

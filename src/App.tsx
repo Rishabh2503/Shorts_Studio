@@ -1132,6 +1132,7 @@ function AppInner() {
                 <PreviewCanvas
                   project={project}
                   time={time}
+                  isPlaying={playing}
                   audioPeaks={audioPeaks}
                   onLoadError={onLoadError}
                 />

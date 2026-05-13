@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { preloadClips, renderFrame, type LoadedClip } from '../engine/render';
+import { preloadClips, renderFrame, syncVideoPlayback, type LoadedClip } from '../engine/render';
 import type { ProjectState } from '../types';
 
 interface Props {
   project: ProjectState;
   /** absolute playhead seconds */
   time: number;
+  /**
+   * Whether the timeline is currently playing. When true, video-backed
+   * clips run via native .play() so frames decode smoothly. When false
+   * (scrubbing), they're paused and seeked precisely to the playhead.
+   */
+  isPlaying?: boolean;
   /**
    * Optional audio onset peaks (relative to project t=0). Forwarded to the
    * renderer so the project-script caption track can align word reveals to
@@ -25,7 +31,14 @@ interface Props {
  *    deterministic. The cache keeps it fast even though the effect runs
  *    on every frame during playback.
  */
-export function PreviewCanvas({ project, time, audioPeaks, onReady, onLoadError }: Props) {
+export function PreviewCanvas({
+  project,
+  time,
+  isPlaying,
+  audioPeaks,
+  onReady,
+  onLoadError
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [loaded, setLoaded] = useState<LoadedClip[]>([]);
 
@@ -56,11 +69,25 @@ export function PreviewCanvas({ project, time, audioPeaks, onReady, onLoadError 
     if (!c) return;
     const ctx = c.getContext('2d');
     if (!ctx) return;
+    // Drive video element play/pause/seek state BEFORE drawing so the
+    // canvas paints from a video that's already showing the right frame.
+    syncVideoPlayback(loaded, time, !!isPlaying);
     renderFrame(
       { ctx, project, clips: loaded, audioPeaks: audioPeaks ?? undefined },
       time
     );
-  }, [time, project, loaded, audioPeaks]);
+  }, [time, project, loaded, audioPeaks, isPlaying]);
+
+  // When this component unmounts (or the loaded set changes), pause any
+  // video elements that may still be playing so they don't keep producing
+  // audible decoded frames in the background.
+  useEffect(() => {
+    return () => {
+      for (const c of loaded) {
+        if (c.kind === 'video' && c.video && !c.video.paused) c.video.pause();
+      }
+    };
+  }, [loaded]);
 
   // Notify parent of canvas element (used by exporter to reuse the same canvas).
   useEffect(() => {

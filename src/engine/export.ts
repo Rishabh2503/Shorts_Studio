@@ -4,7 +4,7 @@
 // Output is WebM (VP9/Opus) which is perfectly accepted by YouTube Shorts.
 
 import type { ProjectState } from '../types';
-import { preloadClips, renderFrame, totalDuration, type LoadedClip } from './render';
+import { preloadClips, renderFrame, syncVideoPlayback, totalDuration, type LoadedClip } from './render';
 import { analyzeAudio } from './audioAnalyzer';
 
 export interface ExportProgress {
@@ -217,12 +217,19 @@ export async function exportVideo(opts: ExportOptions): Promise<ExportResult> {
     function tick(now: number) {
       const elapsed = (now - startTs) / 1000;
       if (elapsed >= dur) {
-        // Render final frame and stop
+        // Render final frame and stop. We pause any playing video clips
+        // explicitly so the encoder doesn't keep receiving frames after
+        // the last canvas draw.
+        syncVideoPlayback(clips, dur, false);
         renderFrame({ ctx, project, clips, audioPeaks, totalDur: dur }, dur);
         resolve();
         return;
       }
       if (now >= nextFrame) {
+        // Keep every video-backed clip's HTMLVideoElement playing in real
+        // time alongside the canvas, so the recorder captures decoded
+        // frames instead of a single frozen poster.
+        syncVideoPlayback(clips, elapsed, true);
         renderFrame({ ctx, project, clips, audioPeaks, totalDur: dur }, elapsed);
         nextFrame += frameInterval;
         onProgress?.({

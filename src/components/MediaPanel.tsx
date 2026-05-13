@@ -161,22 +161,20 @@ export function MediaPanel({ onAddImage, onAddVideo }: Props) {
 
   async function importVideoFile(file: File): Promise<void> {
     setError(null);
-    setVideoProgress({ name: file.name, pct: 5, stage: 'Reading file…' });
+    setVideoProgress({ name: file.name, pct: 10, stage: 'Reading file…' });
     try {
-      // Read the entire file as a data URL up-front so the saved project
-      // contains a self-contained copy of the video (blob: URLs would die
-      // on page reload). We do this BEFORE poster extraction so failures
-      // surface a clear "file too big" error early on.
-      const videoSrc = await readFileAsDataUrl(file, (pct) => {
-        // Map FileReader 0..100 onto 5..70% of overall progress so the bar
-        // doesn't appear to jump backward when poster extraction starts.
-        setVideoProgress({
-          name: file.name,
-          pct: 5 + Math.round(pct * 0.65),
-          stage: 'Reading file…'
-        });
-      });
-      setVideoProgress({ name: file.name, pct: 75, stage: 'Capturing thumbnail…' });
+      // Use a blob: URL instead of a base64 data URL. Reading a 50 MB video
+      // as a data URL bloats it to ~67 MB of in-memory string and makes the
+      // tab feel locked up for several seconds. Blob URLs reference the
+      // underlying File without copying bytes — near-instant, and the
+      // browser streams the video from disk on demand.
+      //
+      // Tradeoff: blob URLs die on page reload, so projects saved with
+      // video clips currently re-load with a missing video source. That's
+      // a session-scope limitation we'll fix with proper File persistence
+      // in IndexedDB later (tracked in BACKLOG).
+      const videoSrc = URL.createObjectURL(file);
+      setVideoProgress({ name: file.name, pct: 50, stage: 'Capturing thumbnail…' });
       const { poster, duration } = await extractVideoPoster(file, { maxDimension: 1080 });
       onAddVideo({
         videoSrc,
@@ -188,25 +186,6 @@ export function MediaPanel({ onAddImage, onAddVideo }: Props) {
     } finally {
       setVideoProgress(null);
     }
-  }
-
-  /** Promisified FileReader.readAsDataURL with progress reporting. */
-  function readFileAsDataUrl(
-    file: File,
-    onProgress?: (pct: number) => void
-  ): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(reader.error ?? new Error('read-failed'));
-      reader.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) onProgress((e.loaded / e.total) * 100);
-      };
-      reader.onload = () => {
-        if (typeof reader.result === 'string') resolve(reader.result);
-        else reject(new Error('Unexpected file reader result.'));
-      };
-      reader.readAsDataURL(file);
-    });
   }
 
   return (

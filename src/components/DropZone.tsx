@@ -65,20 +65,14 @@ export function DropZone({ onImage, onVideo, onAudio }: Props) {
       for (const f of files) {
         try {
           if (f.type.startsWith('video/')) {
-            // True video upload: read the whole file once for persistence,
-            // then grab a poster frame for the timeline thumbnail. We bail
-            // out silently if no onVideo handler is wired (extremely rare
-            // — the host app always provides one).
+            // True video upload: blob URL is dramatically cheaper than a
+            // data URL for large files (no base64 expansion, no 50 MB
+            // string sitting in memory). Tradeoff: blob URLs die on page
+            // reload so videos are session-only for now.
             if (!onVideo) continue;
-            setVideoStatus({ name: f.name, pct: 5, stage: 'Reading file…' });
-            const videoSrc = await fileToDataUrl(f, (pct) => {
-              setVideoStatus({
-                name: f.name,
-                pct: 5 + Math.round(pct * 0.65),
-                stage: 'Reading file…'
-              });
-            });
-            setVideoStatus({ name: f.name, pct: 75, stage: 'Capturing thumbnail…' });
+            setVideoStatus({ name: f.name, pct: 20, stage: 'Reading file…' });
+            const videoSrc = URL.createObjectURL(f);
+            setVideoStatus({ name: f.name, pct: 60, stage: 'Capturing thumbnail…' });
             const { poster, duration } = await extractVideoPoster(f, {
               maxDimension: 1080
             });
