@@ -1281,6 +1281,18 @@ function drawProjectScript(
         ? aiPick
         : { ...aiPick, animation: script.animation };
   }
+  // Apply optional user overrides on top of preset/AI. Each field is
+  // independent so a creator can lock just one (e.g. brand color) while
+  // leaving the font and position AI-driven.
+  if (script.customColor) {
+    style = { ...style, color: script.customColor };
+  }
+  if (script.customStrokeColor) {
+    style = { ...style, stroke: script.customStrokeColor };
+  }
+  if (script.customFontFamily && script.customFontFamily.trim()) {
+    style = { ...style, fontFamily: script.customFontFamily };
+  }
   const uppercase = preset?.style.uppercase ?? false;
   const presetPill = preset?.style.pill ?? null;
   const presetStrokeWidth = preset?.style.strokeWidth;
@@ -1358,7 +1370,17 @@ function drawProjectScript(
 
   const lineHeight = Math.round(size * 1.15);
   const totalHeight = lines.length * lineHeight;
-  const cy = captionAnchorY(style.animation, H);
+  // Vertical position: user override wins; otherwise pick animation-aware
+  // anchor (typically the bottom-third TikTok safe zone). Clamp to a
+  // reasonable inner range so the caption block stays fully on-screen.
+  const cy =
+    typeof script.customPositionY === 'number'
+      ? H *
+        Math.max(
+          0.05 + totalHeight / (2 * H),
+          Math.min(0.95 - totalHeight / (2 * H), script.customPositionY)
+        )
+      : captionAnchorY(style.animation, H);
   const blockTop = cy - totalHeight / 2;
 
   // We need to know the position of every word in the wrapped layout.

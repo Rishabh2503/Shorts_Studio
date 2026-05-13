@@ -8,6 +8,7 @@ import {
   IconButton,
   LinearProgress,
   MenuItem,
+  Slider,
   Stack,
   Switch,
   TextField,
@@ -20,6 +21,8 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DownloadIcon from '@mui/icons-material/Download';
 import TuneIcon from '@mui/icons-material/Tune';
+import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded';
+import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 import {
   CAPTION_ANIM_GROUPS,
   CAPTION_ANIM_LABELS,
@@ -76,6 +79,49 @@ interface AnimOption {
 const ANIM_OPTIONS: AnimOption[] = CAPTION_ANIM_GROUPS.flatMap((g) =>
   g.animations.map((id) => ({ id, label: CAPTION_ANIM_LABELS[id], group: g.label }))
 );
+
+// Curated font list for the "Customize → Font" picker. We use only widely
+// available system / web-safe fonts so a fresh visitor on Vercel sees the
+// same look you previewed locally. The first entry resets to AI/preset.
+const FONT_CHOICES: { label: string; value: string }[] = [
+  { label: 'AI / preset (default)', value: '' },
+  { label: 'Inter — modern sans', value: 'Inter, system-ui, sans-serif' },
+  { label: 'System UI', value: 'system-ui, -apple-system, sans-serif' },
+  { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
+  { label: 'Helvetica Neue', value: '"Helvetica Neue", Helvetica, Arial, sans-serif' },
+  { label: 'Impact — bold display', value: 'Impact, "Arial Black", sans-serif' },
+  { label: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
+  { label: 'Georgia — classic serif', value: 'Georgia, "Times New Roman", serif' },
+  { label: 'Times New Roman', value: '"Times New Roman", Times, serif' },
+  { label: 'Courier New — mono', value: '"Courier New", Courier, monospace' },
+  { label: 'Comic Sans MS — playful', value: '"Comic Sans MS", "Comic Sans", cursive' }
+];
+
+// Suggested caption colors. The first set is "fill" colors; the AI picks
+// from a similar palette so these double as inspiration when users want a
+// concrete brand color. Strokes default to black for fill colors below.
+const COLOR_SUGGESTIONS: string[] = [
+  '#ffffff',
+  '#ffd400',
+  '#22d3ee',
+  '#a78bfa',
+  '#f472b6',
+  '#34d399',
+  '#fb923c',
+  '#ef4444',
+  '#fef3c7',
+  '#0f172a'
+];
+
+// Vertical-position presets. The renderer accepts any 0..1 float — these
+// are just the three most common picks (top, middle, bottom-third).
+const POSITION_PRESETS: { label: string; value: number | undefined }[] = [
+  { label: 'AI default', value: undefined },
+  { label: 'Top', value: 0.18 },
+  { label: 'Middle', value: 0.5 },
+  { label: 'Lower-third (TikTok)', value: 0.78 },
+  { label: 'Bottom', value: 0.9 }
+];
 
 /**
  * Project-wide script (transcript) editor.
@@ -491,6 +537,205 @@ export function ScriptPanel({
             .srt
           </Button>
         )}
+      </Stack>
+
+      {/* ============== Customize (optional overrides) ==============
+          All three fields below are optional. Leave them at "AI / preset
+          default" to keep the existing AI auto-style picker running; set
+          one to lock that specific aspect (brand color, font family,
+          vertical position) while leaving the rest AI-driven. */}
+      <Divider sx={{ my: 0.5 }} />
+      <Stack spacing={1.25}>
+        <Stack direction="row" spacing={0.75} alignItems="center">
+          <PaletteRoundedIcon fontSize="small" sx={{ color: '#a78bfa' }} />
+          <Typography variant="caption" sx={{ fontWeight: 700 }}>
+            Customize caption look (optional)
+          </Typography>
+          <Tooltip title="Reset all custom overrides — AI / preset takes over again">
+            <span>
+              <IconButton
+                size="small"
+                disabled={
+                  !script.customColor &&
+                  !script.customStrokeColor &&
+                  !script.customFontFamily &&
+                  script.customPositionY == null
+                }
+                onClick={() =>
+                  onChange({
+                    ...script,
+                    customColor: undefined,
+                    customStrokeColor: undefined,
+                    customFontFamily: undefined,
+                    customPositionY: undefined
+                  })
+                }
+              >
+                <RestartAltRoundedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Stack>
+
+        {/* Color row: native color picker + quick-pick swatches. */}
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+          <Box
+            component="label"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.75,
+              cursor: 'pointer'
+            }}
+          >
+            <Typography variant="caption" color="text.secondary">
+              Color
+            </Typography>
+            {/* Native input gives us a real OS picker with zero deps. */}
+            <input
+              type="color"
+              value={script.customColor ?? '#ffffff'}
+              onChange={(e) =>
+                onChange({ ...script, customColor: e.target.value })
+              }
+              style={{
+                width: 28,
+                height: 28,
+                padding: 0,
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 6,
+                background: 'transparent',
+                cursor: 'pointer'
+              }}
+            />
+          </Box>
+          <Box
+            component="label"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.75,
+              cursor: 'pointer'
+            }}
+          >
+            <Typography variant="caption" color="text.secondary">
+              Stroke
+            </Typography>
+            <input
+              type="color"
+              value={script.customStrokeColor ?? '#000000'}
+              onChange={(e) =>
+                onChange({ ...script, customStrokeColor: e.target.value })
+              }
+              style={{
+                width: 28,
+                height: 28,
+                padding: 0,
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 6,
+                background: 'transparent',
+                cursor: 'pointer'
+              }}
+            />
+          </Box>
+          <Stack
+            direction="row"
+            spacing={0.5}
+            sx={{ flexWrap: 'wrap', rowGap: 0.5 }}
+          >
+            {COLOR_SUGGESTIONS.map((c) => (
+              <Tooltip key={c} title={c}>
+                <Box
+                  onClick={() => onChange({ ...script, customColor: c })}
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: '50%',
+                    background: c,
+                    cursor: 'pointer',
+                    border:
+                      script.customColor === c
+                        ? '2px solid #fff'
+                        : '1px solid rgba(255,255,255,0.25)',
+                    transition: 'transform 120ms',
+                    '&:hover': { transform: 'scale(1.15)' }
+                  }}
+                />
+              </Tooltip>
+            ))}
+          </Stack>
+        </Stack>
+
+        {/* Font row. */}
+        <TextField
+          select
+          size="small"
+          label="Font family (AI suggests when blank)"
+          value={script.customFontFamily ?? ''}
+          onChange={(e) =>
+            onChange({
+              ...script,
+              customFontFamily: e.target.value || undefined
+            })
+          }
+          fullWidth
+        >
+          {FONT_CHOICES.map((f) => (
+            <MenuItem
+              key={f.label}
+              value={f.value}
+              sx={{ fontFamily: f.value || undefined }}
+            >
+              {f.label}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        {/* Position row: preset buttons + fine slider. */}
+        <Stack spacing={0.75}>
+          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
+            <Typography variant="caption" color="text.secondary">
+              Position
+            </Typography>
+            {POSITION_PRESETS.map((p) => {
+              const active =
+                (p.value == null && script.customPositionY == null) ||
+                (p.value != null &&
+                  script.customPositionY != null &&
+                  Math.abs(script.customPositionY - p.value) < 0.005);
+              return (
+                <Button
+                  key={p.label}
+                  size="small"
+                  variant={active ? 'contained' : 'outlined'}
+                  onClick={() =>
+                    onChange({ ...script, customPositionY: p.value })
+                  }
+                  sx={{ py: 0.25, px: 1, minWidth: 0, textTransform: 'none' }}
+                >
+                  {p.label}
+                </Button>
+              );
+            })}
+          </Stack>
+          {script.customPositionY != null && (
+            <Box sx={{ px: 1 }}>
+              <Slider
+                size="small"
+                value={Math.round(script.customPositionY * 100)}
+                min={5}
+                max={95}
+                step={1}
+                valueLabelDisplay="auto"
+                valueLabelFormat={(v) => `${v}%`}
+                onChange={(_, v) => {
+                  const next = Array.isArray(v) ? v[0] : v;
+                  onChange({ ...script, customPositionY: next / 100 });
+                }}
+              />
+            </Box>
+          )}
+        </Stack>
       </Stack>
     </Stack>
   );

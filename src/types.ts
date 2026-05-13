@@ -228,6 +228,29 @@ export interface ProjectScript {
    * sidecar .srt / .vtt file alongside the .webm download.
    */
   burnIn?: boolean;
+
+  // -------------------------------------------------------------------------
+  // Optional user-style overrides. All fields below are *optional* — when
+  // unset, the AI auto-style picker (or the chosen preset) drives the
+  // visual. When set, they win, so creators can lock a brand color / font /
+  // position without disabling the AI suggestions for the rest.
+  // -------------------------------------------------------------------------
+  /** CSS color string for the caption fill (e.g. "#ffd400"). */
+  customColor?: string;
+  /** CSS color string for the caption stroke / outline. */
+  customStrokeColor?: string;
+  /**
+   * CSS font-family string. Should include fallbacks, e.g.
+   * `"Impact, Arial Black, sans-serif"`. Web-safe fonts work best.
+   */
+  customFontFamily?: string;
+  /**
+   * Vertical position of the caption block as a fraction of canvas height
+   * (0 = top edge, 0.5 = middle, 1 = bottom edge). When unset, the renderer
+   * picks an animation-appropriate location automatically (typically 0.78
+   * for the bottom-third / TikTok safe zone).
+   */
+  customPositionY?: number;
 }
 
 /**
