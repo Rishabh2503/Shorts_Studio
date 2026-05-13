@@ -4,6 +4,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  LinearProgress,
   MenuItem,
   Stack,
   TextField,
@@ -11,7 +12,9 @@ import {
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import MovieFilterRoundedIcon from '@mui/icons-material/MovieFilterRounded';
 import { generateImage, TRENDING_PROMPTS, type ImageSource } from '../engine/ai';
+import { extractVideoFrames } from '../engine/videoFrames';
 
 interface Props {
   onAddImage: (src: string, prompt?: string) => void;
@@ -47,6 +50,16 @@ export function MediaPanel({ onAddImage }: Props) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  // Video import progress: when a user uploads an MP4/WebM we extract a
+  // batch of evenly-spaced frames so each one becomes a clip. The progress
+  // bar surfaces extraction status so users with longer videos don't think
+  // the page froze.
+  const [videoProgress, setVideoProgress] = useState<{
+    name: string;
+    pct: number; // 0..100
+    captured: number;
+    total: number;
+  } | null>(null);
 
   async function handleGenerate(p: string) {
     if (!p.trim()) return;
@@ -87,14 +100,78 @@ export function MediaPanel({ onAddImage }: Props) {
   function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
     if (!files) return;
-    Array.from(files).forEach((f) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') onAddImage(reader.result);
-      };
-      reader.readAsDataURL(f);
+    const list = Array.from(files);
+    // Process sequentially so videos don't all hammer the decoder in
+    // parallel. Images go in immediately; videos go through the frame
+    // extractor.
+    (async () => {
+      for (const f of list) {
+        try {
+          if (f.type.startsWith('video/')) {
+            await importVideoFile(f);
+          } else if (f.type.startsWith('image/')) {
+            await importImageFile(f);
+          } else {
+            // Fall back to image — some browsers don't reliably set the
+            // MIME type for HEIC etc., but the <img> tag will reject if it
+            // can't decode.
+            await importImageFile(f);
+          }
+        } catch (err) {
+          setError(
+            `Couldn't import "${f.name}": ${(err as Error).message ?? 'Unknown error'}`
+          );
+        }
+      }
+    })().finally(() => {
+      // Reset the file input so re-selecting the same file fires onChange.
+      e.target.value = '';
     });
-    e.target.value = '';
+  }
+
+  function importImageFile(file: File): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error('read-failed'));
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          onAddImage(reader.result);
+          resolve();
+        } else {
+          reject(new Error('Unexpected file reader result.'));
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function importVideoFile(file: File): Promise<void> {
+    setError(null);
+    setVideoProgress({ name: file.name, pct: 0, captured: 0, total: 0 });
+    try {
+      const frames = await extractVideoFrames(file, {
+        secondsPerFrame: 3,
+        minFrames: 2,
+        maxFrames: 20,
+        maxDimension: 1080,
+        onProgress: (p, captured, total) => {
+          setVideoProgress({
+            name: file.name,
+            pct: Math.round(p * 100),
+            captured,
+            total
+          });
+        }
+      });
+      for (const frame of frames) {
+        // Use the source timestamp in the prompt slot so the timeline panel
+        // shows "frame @ 1.5s" — helps users identify which clip is which
+        // after a video import.
+        onAddImage(frame.dataUrl, `video frame @ ${frame.sourceTime.toFixed(1)}s`);
+      }
+    } finally {
+      setVideoProgress(null);
+    }
   }
 
   return (
@@ -200,15 +277,64 @@ export function MediaPanel({ onAddImage }: Props) {
       </Box>
 
       <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.08)', pt: 2 }}>
-        <Button
-          component="label"
-          variant="outlined"
-          startIcon={<UploadFileIcon />}
-          fullWidth
-        >
-          Upload your own image(s)
-          <input type="file" accept="image/*" hidden multiple onChange={handleUpload} />
-        </Button>
+        <Stack spacing={1.25}>
+          <Button
+            component="label"
+            variant="outlined"
+            startIcon={
+              videoProgress ? (
+                <CircularProgress size={18} color="inherit" />
+              ) : (
+                <UploadFileIcon />
+              )
+            }
+            fullWidth
+            disabled={!!videoProgress}
+          >
+            {videoProgress
+              ? `Extracting frames from ${videoProgress.name}\u2026`
+              : 'Upload image(s) or video'}
+            <input
+              type="file"
+              accept="image/*,video/*"
+              hidden
+              multiple
+              onChange={handleUpload}
+            />
+          </Button>
+
+          {videoProgress && (
+            <Box>
+              <LinearProgress
+                variant="determinate"
+                value={videoProgress.pct}
+                sx={{ height: 6, borderRadius: 3 }}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', mt: 0.5 }}
+              >
+                {videoProgress.total > 0
+                  ? `Captured ${videoProgress.captured} of ${videoProgress.total} frames (${videoProgress.pct}%)`
+                  : 'Decoding video metadata\u2026'}
+              </Typography>
+            </Box>
+          )}
+
+          <Stack
+            direction="row"
+            spacing={0.75}
+            alignItems="center"
+            sx={{ color: 'text.secondary' }}
+          >
+            <MovieFilterRoundedIcon sx={{ fontSize: 16, opacity: 0.7 }} />
+            <Typography variant="caption">
+              Videos are sampled into evenly-spaced frames so every clip still
+              gets effects, captions and transitions. MP4/WebM work best.
+            </Typography>
+          </Stack>
+        </Stack>
       </Box>
     </Stack>
   );

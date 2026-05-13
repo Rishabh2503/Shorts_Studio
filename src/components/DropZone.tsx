@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, LinearProgress, Stack, Typography } from '@mui/material';
 import CloudUploadRoundedIcon from '@mui/icons-material/CloudUploadRounded';
+import { extractVideoFrames } from '../engine/videoFrames';
 
 interface Props {
   /** Called once per accepted image with its data URL + filename. */
@@ -15,6 +16,14 @@ interface Props {
  */
 export function DropZone({ onImage, onAudio }: Props) {
   const [active, setActive] = useState(false);
+  // When a video is being processed we show an overlay with progress so the
+  // user knows the drop succeeded even after the drag-over visual fades.
+  const [videoStatus, setVideoStatus] = useState<{
+    name: string;
+    pct: number;
+    captured: number;
+    total: number;
+  } | null>(null);
 
   useEffect(() => {
     let dragCounter = 0;
@@ -46,14 +55,39 @@ export function DropZone({ onImage, onAudio }: Props) {
       const files = Array.from(e.dataTransfer?.files ?? []);
       for (const f of files) {
         try {
-          const url = await fileToDataUrl(f);
-          if (f.type.startsWith('image/')) {
+          if (f.type.startsWith('video/')) {
+            setVideoStatus({ name: f.name, pct: 0, captured: 0, total: 0 });
+            const frames = await extractVideoFrames(f, {
+              secondsPerFrame: 3,
+              minFrames: 2,
+              maxFrames: 20,
+              maxDimension: 1080,
+              onProgress: (p, captured, total) =>
+                setVideoStatus({
+                  name: f.name,
+                  pct: Math.round(p * 100),
+                  captured,
+                  total
+                })
+            });
+            for (const frame of frames) {
+              onImage(
+                frame.dataUrl,
+                `${f.name} @ ${frame.sourceTime.toFixed(1)}s`
+              );
+            }
+          } else if (f.type.startsWith('image/')) {
+            const url = await fileToDataUrl(f);
             onImage(url, f.name);
           } else if (f.type.startsWith('audio/') && onAudio) {
+            const url = await fileToDataUrl(f);
             onAudio(url, f.name);
           }
         } catch {
-          // ignore individual file failures
+          // ignore individual file failures — the user can re-try from the
+          // sidebar where errors are surfaced inline.
+        } finally {
+          setVideoStatus(null);
         }
       }
     }
@@ -70,7 +104,7 @@ export function DropZone({ onImage, onAudio }: Props) {
     };
   }, [onImage, onAudio]);
 
-  if (!active) return null;
+  if (!active && !videoStatus) return null;
   return (
     <Box
       sx={{
@@ -95,16 +129,36 @@ export function DropZone({ onImage, onAudio }: Props) {
           borderRadius: 4,
           border: '2px dashed rgba(167,139,250,0.7)',
           background: 'rgba(16,16,30,0.85)',
-          boxShadow: '0 20px 60px rgba(124,58,237,0.4)'
+          boxShadow: '0 20px 60px rgba(124,58,237,0.4)',
+          minWidth: 320
         }}
       >
         <CloudUploadRoundedIcon sx={{ fontSize: 56, color: '#a78bfa' }} />
         <Typography variant="h5" sx={{ fontWeight: 700 }}>
-          Drop to add
+          {videoStatus ? 'Importing video\u2026' : 'Drop to add'}
         </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Images become clips • Audio replaces the soundtrack
-        </Typography>
+        {videoStatus ? (
+          <Stack spacing={1} sx={{ width: '100%' }}>
+            <LinearProgress
+              variant="determinate"
+              value={videoStatus.pct}
+              sx={{ height: 6, borderRadius: 3 }}
+            />
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ textAlign: 'center' }}
+            >
+              {videoStatus.total > 0
+                ? `Captured ${videoStatus.captured} of ${videoStatus.total} frames`
+                : `Decoding ${videoStatus.name}\u2026`}
+            </Typography>
+          </Stack>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            Images & videos become clips • Audio replaces the soundtrack
+          </Typography>
+        )}
       </Stack>
     </Box>
   );
