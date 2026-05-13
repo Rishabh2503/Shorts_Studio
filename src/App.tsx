@@ -406,6 +406,57 @@ function AppInner() {
     [toast]
   );
 
+  /**
+   * Adds an uploaded video as a single video-backed clip. The clip's
+   * duration defaults to the source duration (capped at 30s, the timeline
+   * max), the timeline thumbnail uses the captured poster frame, and the
+   * effect defaults to 'none' so the user's footage plays unmolested by
+   * any AI-picked Ken Burns / zoom on top of it.
+   */
+  const addVideoClip = useCallback(
+    ({
+      videoSrc,
+      poster,
+      duration,
+      name
+    }: {
+      videoSrc: string;
+      poster: string;
+      duration: number;
+      name: string;
+    }) => {
+      // Clamp to the same per-clip duration window the timeline UI enforces
+      // (0.1s..30s). For longer source videos, the renderer trims to
+      // [videoStart..videoEnd] which we leave at the full window — users can
+      // shorten via the Duration input later.
+      const safeDur = Math.max(0.1, Math.min(30, duration || 3));
+      const clip: ImageClip = {
+        id: uuid(),
+        // `src` holds the still poster so existing thumbnail / library /
+        // export-cover paths keep working without a video element.
+        src: poster,
+        duration: safeDur,
+        // Real footage usually shouldn't have additional camera moves
+        // layered on top, so default to 'none'. Users can switch to any
+        // other effect from the Timeline picker.
+        effect: 'none',
+        effectSeed: newEffectSeed(),
+        transition: 'fade',
+        captionAnim: 'auto',
+        captionStyleSeed: newCaptionSeed(),
+        prompt: name,
+        kind: 'video',
+        videoSrc,
+        videoStart: 0,
+        videoEnd: duration
+      };
+      setProject((p) => ({ ...p, clips: [...p.clips, clip] }));
+      setSelectedId(clip.id);
+      toast.show(`Video added: ${name}`, 'success');
+    },
+    [toast]
+  );
+
   // Drag-and-drop audio handler with type validation.
   const handleAudioDrop = useCallback(
     (dataUrl: string, name: string) => {
@@ -843,7 +894,11 @@ function AppInner() {
 
   return (
     <Box className="aurora" sx={{ minHeight: '100vh' }}>
-      <DropZone onImage={(url) => addImage(url)} onAudio={handleAudioDrop} />
+      <DropZone
+        onImage={(url) => addImage(url)}
+        onVideo={addVideoClip}
+        onAudio={handleAudioDrop}
+      />
       {/* Hidden audio elements used during preview only. The exporter has its own. */}
       {project.audio.src && (
         <audio ref={audioRef} src={project.audio.src} preload="auto" />
@@ -1002,7 +1057,7 @@ function AppInner() {
             }}
           >
             <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
-              <MediaPanel onAddImage={addImage} />
+              <MediaPanel onAddImage={addImage} onAddVideo={addVideoClip} />
             </Paper>
             <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
               <AudioPanel

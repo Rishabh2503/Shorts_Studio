@@ -14,10 +14,25 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import MovieFilterRoundedIcon from '@mui/icons-material/MovieFilterRounded';
 import { generateImage, TRENDING_PROMPTS, type ImageSource } from '../engine/ai';
-import { extractVideoFrames } from '../engine/videoFrames';
+import { extractVideoPoster } from '../engine/videoFrames';
 
 interface Props {
+  /**
+   * Adds a still image clip. `prompt` is stored on the clip for re-rolls
+   * and shown as the timeline tooltip.
+   */
   onAddImage: (src: string, prompt?: string) => void;
+  /**
+   * Adds an uploaded video as a single video-backed clip. The renderer
+   * draws live frames from `videoSrc`; `poster` is the still thumbnail
+   * shown in the timeline strip and the project library card.
+   */
+  onAddVideo: (args: {
+    videoSrc: string;
+    poster: string;
+    duration: number;
+    name: string;
+  }) => void;
 }
 
 // Pollinations deprecated `flux-realism` and `flux-anime` (their /models
@@ -43,22 +58,21 @@ const SOURCES: { value: ImageSource; label: string; hint: string }[] = [
   { value: 'picsum', label: 'Stock photo (random)', hint: 'Random photo, no AI — last-resort' }
 ];
 
-export function MediaPanel({ onAddImage }: Props) {
+export function MediaPanel({ onAddImage, onAddVideo }: Props) {
   const [prompt, setPrompt] = useState('');
   const [style, setStyle] = useState<typeof STYLES[number]['value']>('auto');
   const [source, setSource] = useState<ImageSource>('auto');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
-  // Video import progress: when a user uploads an MP4/WebM we extract a
-  // batch of evenly-spaced frames so each one becomes a clip. The progress
-  // bar surfaces extraction status so users with longer videos don't think
-  // the page froze.
+  // Video import progress: when a user uploads an MP4/WebM we read the
+  // full file as a data URL (so the project library can persist it) and
+  // extract a poster frame for the timeline thumbnail. The progress bar
+  // surfaces work so users with longer videos don't think the page froze.
   const [videoProgress, setVideoProgress] = useState<{
     name: string;
     pct: number; // 0..100
-    captured: number;
-    total: number;
+    stage: string;
   } | null>(null);
 
   async function handleGenerate(p: string) {
@@ -147,31 +161,52 @@ export function MediaPanel({ onAddImage }: Props) {
 
   async function importVideoFile(file: File): Promise<void> {
     setError(null);
-    setVideoProgress({ name: file.name, pct: 0, captured: 0, total: 0 });
+    setVideoProgress({ name: file.name, pct: 5, stage: 'Reading file…' });
     try {
-      const frames = await extractVideoFrames(file, {
-        secondsPerFrame: 3,
-        minFrames: 2,
-        maxFrames: 20,
-        maxDimension: 1080,
-        onProgress: (p, captured, total) => {
-          setVideoProgress({
-            name: file.name,
-            pct: Math.round(p * 100),
-            captured,
-            total
-          });
-        }
+      // Read the entire file as a data URL up-front so the saved project
+      // contains a self-contained copy of the video (blob: URLs would die
+      // on page reload). We do this BEFORE poster extraction so failures
+      // surface a clear "file too big" error early on.
+      const videoSrc = await readFileAsDataUrl(file, (pct) => {
+        // Map FileReader 0..100 onto 5..70% of overall progress so the bar
+        // doesn't appear to jump backward when poster extraction starts.
+        setVideoProgress({
+          name: file.name,
+          pct: 5 + Math.round(pct * 0.65),
+          stage: 'Reading file…'
+        });
       });
-      for (const frame of frames) {
-        // Use the source timestamp in the prompt slot so the timeline panel
-        // shows "frame @ 1.5s" — helps users identify which clip is which
-        // after a video import.
-        onAddImage(frame.dataUrl, `video frame @ ${frame.sourceTime.toFixed(1)}s`);
-      }
+      setVideoProgress({ name: file.name, pct: 75, stage: 'Capturing thumbnail…' });
+      const { poster, duration } = await extractVideoPoster(file, { maxDimension: 1080 });
+      onAddVideo({
+        videoSrc,
+        poster,
+        duration,
+        name: file.name
+      });
+      setVideoProgress({ name: file.name, pct: 100, stage: 'Done' });
     } finally {
       setVideoProgress(null);
     }
+  }
+
+  /** Promisified FileReader.readAsDataURL with progress reporting. */
+  function readFileAsDataUrl(
+    file: File,
+    onProgress?: (pct: number) => void
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error('read-failed'));
+      reader.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress((e.loaded / e.total) * 100);
+      };
+      reader.onload = () => {
+        if (typeof reader.result === 'string') resolve(reader.result);
+        else reject(new Error('Unexpected file reader result.'));
+      };
+      reader.readAsDataURL(file);
+    });
   }
 
   return (
@@ -292,7 +327,7 @@ export function MediaPanel({ onAddImage }: Props) {
             disabled={!!videoProgress}
           >
             {videoProgress
-              ? `Extracting frames from ${videoProgress.name}\u2026`
+              ? `${videoProgress.stage} — ${videoProgress.name}`
               : 'Upload image(s) or video'}
             <input
               type="file"
@@ -315,9 +350,7 @@ export function MediaPanel({ onAddImage }: Props) {
                 color="text.secondary"
                 sx={{ display: 'block', mt: 0.5 }}
               >
-                {videoProgress.total > 0
-                  ? `Captured ${videoProgress.captured} of ${videoProgress.total} frames (${videoProgress.pct}%)`
-                  : 'Decoding video metadata\u2026'}
+                {`${videoProgress.stage} (${videoProgress.pct}%)`}
               </Typography>
             </Box>
           )}

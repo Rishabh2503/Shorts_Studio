@@ -172,7 +172,12 @@ export async function exportVideo(opts: ExportOptions): Promise<ExportResult> {
     recorder.onerror = (e) => reject((e as ErrorEvent).error ?? new Error('Recorder error'));
   });
 
-  recorder.start(100);
+  // We deliberately omit the timeslice argument so the encoder emits a single
+  // contiguous WebM blob on stop() instead of many small chunks. Some
+  // Chromium builds produce corrupted tail bytes when many small chunks are
+  // concatenated client-side, which manifested as a "broken" exported video
+  // that wouldn't seek past the last few seconds in some players.
+  recorder.start();
   // Seek + play each attached audio source. The main slot drives the trim
   // logic that hard-stops at audio.end for non-loop modes; the background
   // slot just plays from its own trim start (looped or not per its sync
@@ -232,6 +237,20 @@ export async function exportVideo(opts: ExportOptions): Promise<ExportResult> {
   });
 
   onProgress?.({ phase: 'finalizing', progress: 0.98, message: 'Finalizing video…' });
+  // Give the canvas captureStream + MediaRecorder pipeline time to flush
+  // the very last frames into the encoder before we tear it down. Without
+  // this settle window the recorder.stop() races the trailing frames and
+  // the resulting WebM is missing/garbling the final ~200ms of video,
+  // which users perceive as a "corrupted" output.
+  await new Promise<void>((r) => setTimeout(r, 250));
+  // Defensive flush — asks the encoder to emit any buffered chunk now,
+  // BEFORE we call stop(). On Chromium with no timeslice this is a no-op
+  // until stop, but on Firefox / Safari it ensures we don't lose the tail.
+  try {
+    recorder.requestData();
+  } catch {
+    /* not all browsers support requestData; safe to ignore */
+  }
   recorder.stop();
   for (const el of audio.els) el.pause();
   await finished;

@@ -193,3 +193,62 @@ function clampToSeekable(video: HTMLVideoElement, t: number): number {
   }
   return Math.max(0, Math.min(video.duration || t, t));
 }
+
+export interface VideoPoster {
+  /** PNG data URL of the poster frame (taken near the start of the video). */
+  poster: string;
+  /** Source video duration in seconds. */
+  duration: number;
+  /** Native pixel width of the source video. */
+  width: number;
+  /** Native pixel height of the source video. */
+  height: number;
+}
+
+/**
+ * Capture a single representative frame + duration from a video file. Used
+ * by the upload flow to populate the timeline thumbnail without paying the
+ * cost of extracting many frames. The poster is taken slightly past t=0 to
+ * avoid the all-black opening frame common in fade-in videos.
+ */
+export async function extractVideoPoster(
+  file: File,
+  opts: { maxDimension?: number } = {}
+): Promise<VideoPoster> {
+  const { maxDimension = 1080 } = opts;
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.preload = 'auto';
+  video.muted = true;
+  video.crossOrigin = 'anonymous';
+  video.playsInline = true;
+  video.src = url;
+  try {
+    await waitForMetadata(video);
+    const duration = isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    if (duration <= 0) {
+      throw new Error('Video has no measurable duration (corrupt or empty file).');
+    }
+    // Pick a poster a hair after t=0 to dodge fade-in black frames, but
+    // never further than 1s in so the thumbnail still represents the start.
+    const posterT = clampToSeekable(video, Math.min(0.5, duration * 0.05));
+    await seekTo(video, posterT);
+
+    const { vw, vh } = videoSize(video);
+    const scale = Math.min(1, maxDimension / Math.max(vw, vh));
+    const cw = Math.max(1, Math.round(vw * scale));
+    const ch = Math.max(1, Math.round(vh * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Browser does not support 2D canvas.');
+    ctx.drawImage(video, 0, 0, cw, ch);
+    const poster = canvas.toDataURL('image/png');
+    return { poster, duration, width: vw, height: vh };
+  } finally {
+    URL.revokeObjectURL(url);
+    video.removeAttribute('src');
+    video.load();
+  }
+}

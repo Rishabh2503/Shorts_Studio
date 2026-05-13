@@ -22,10 +22,59 @@ export interface LoadedClip extends ImageClip {
   image: HTMLImageElement;
   /** Second image when the clip is in split-screen mode. */
   splitImage?: HTMLImageElement;
+  /**
+   * Fully-buffered video element for `kind: 'video'` clips. Always muted
+   * (project audio is mixed separately) and seeked per-frame by the
+   * renderer to follow the clip's local progress.
+   */
+  video?: HTMLVideoElement;
+}
+
+/** A canvas-drawable source we can pass to drawImage(). */
+type DrawSource = HTMLImageElement | HTMLVideoElement;
+
+/** Native pixel width of a drawable (works for both images and videos). */
+function sourceWidth(s: DrawSource): number {
+  return s instanceof HTMLVideoElement ? s.videoWidth || 1 : s.naturalWidth || s.width || 1;
+}
+function sourceHeight(s: DrawSource): number {
+  return s instanceof HTMLVideoElement ? s.videoHeight || 1 : s.naturalHeight || s.height || 1;
 }
 
 export async function loadImage(src: string): Promise<HTMLImageElement> {
   return loadImageCached(src);
+}
+
+/**
+ * Load a video file (data URL or remote URL) into an off-DOM HTMLVideoElement
+ * that's ready to be drawn to a canvas. The element is muted, plays inline,
+ * and preloads enough data for the first frame to be available immediately.
+ * Resolves once `loadeddata` fires so callers can safely call drawImage().
+ */
+async function loadVideoElement(src: string): Promise<HTMLVideoElement> {
+  const v = document.createElement('video');
+  v.crossOrigin = 'anonymous';
+  v.muted = true;
+  v.defaultMuted = true;
+  v.playsInline = true;
+  v.preload = 'auto';
+  v.src = src;
+  await new Promise<void>((resolve, reject) => {
+    const onReady = () => {
+      v.removeEventListener('loadeddata', onReady);
+      v.removeEventListener('error', onErr);
+      resolve();
+    };
+    const onErr = () => {
+      v.removeEventListener('loadeddata', onReady);
+      v.removeEventListener('error', onErr);
+      reject(new Error('Video failed to load'));
+    };
+    v.addEventListener('loadeddata', onReady);
+    v.addEventListener('error', onErr);
+    v.load();
+  });
+  return v;
 }
 
 export async function preloadClips(clips: ImageClip[]): Promise<LoadedClip[]> {
@@ -43,7 +92,26 @@ export async function preloadClips(clips: ImageClip[]): Promise<LoadedClip[]> {
           splitImage = undefined;
         }
       }
-      return { ...c, image, splitImage };
+      // Video-backed clips also load the source video element. If it fails
+      // we still return the clip so the poster image keeps the timeline
+      // visually consistent, but the renderer will fall back to the poster.
+      let video: HTMLVideoElement | undefined;
+      if (c.kind === 'video' && c.videoSrc) {
+        try {
+          video = await loadVideoElement(c.videoSrc);
+          // Seek to the start trim so the first preview frame matches the
+          // exported first frame. Wrapped in try/catch because some browsers
+          // throw on currentTime assignment before metadata fully settles.
+          try {
+            video.currentTime = c.videoStart ?? 0;
+          } catch {
+            /* ignore — will be re-seeked on first render */
+          }
+        } catch {
+          video = undefined;
+        }
+      }
+      return { ...c, image, splitImage, video };
     })
   );
   const out: LoadedClip[] = [];
@@ -148,6 +216,12 @@ function applyEffect(effect: EffectId, p: number): DrawTransform {
     case 'auto':
       // Should be resolved before this is called, but treat as kenburns.
       return applyEffect('kenburns', p);
+
+    // No motion at all — image sits still, no transform applied. Picked by
+    // creators who want a true static photo, or who are uploading a video
+    // and don't want a Ken Burns layered on top of real footage.
+    case 'none':
+      return tr;
 
     // ─── Camera ──────────────────────────────────────────────────────
     case 'kenburns': {
@@ -464,8 +538,8 @@ function buildFilterString(t: DrawTransform): string {
  */
 function drawSplitCover(
   ctx: CanvasRenderingContext2D,
-  imgA: HTMLImageElement,
-  imgB: HTMLImageElement,
+  imgA: DrawSource,
+  imgB: DrawSource,
   W: number,
   H: number,
   t: DrawTransform,
@@ -511,12 +585,14 @@ function drawSplitCover(
 
 function drawCover(
   ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
+  img: DrawSource,
   W: number,
   H: number,
   t: DrawTransform
 ) {
-  const ar = img.width / img.height;
+  const iw = sourceWidth(img);
+  const ih = sourceHeight(img);
+  const ar = iw / ih;
   const canvasAr = W / H;
   let dw: number, dh: number;
   if (ar > canvasAr) {
@@ -573,13 +649,13 @@ function drawCover(
   } else if (t.vhsRoll !== 0) {
     // Split into two horizontal bands and offset them.
     const half = H / 2;
-    ctx.drawImage(img, 0, 0, img.width, img.height / 2, dx, dy + t.vhsRoll, dw, dh / 2);
+    ctx.drawImage(img, 0, 0, iw, ih / 2, dx, dy + t.vhsRoll, dw, dh / 2);
     ctx.drawImage(
       img,
       0,
-      img.height / 2,
-      img.width,
-      img.height / 2,
+      ih / 2,
+      iw,
+      ih / 2,
       dx,
       dy + half - t.vhsRoll,
       dw,
@@ -1573,9 +1649,32 @@ export function renderFrame(rc: RenderContext, t: number): void {
    * second image and split mode, the canvas is split into two halves and
    * each image is cover-fit into its half. Both halves share the clip's
    * effect so motion looks coherent across the divider.
-   */
+   *
+   * For `kind: 'video'` clips we seek the backing HTMLVideoElement to the
+   * matching point inside its trim window and draw the live frame instead
+   * of the still poster. The seek is best-effort \u2014 the video may not have
+   * decoded the requested frame yet, in which case `drawImage` simply
+   * paints whatever frame the decoder is currently holding (which is what
+   * users expect for a real-time export anyway).\n   */
   const drawClipImages = (c: LoadedClip, p: number) => {
     const tr = applyEffect(resolveEffect(c), p);
+    // Video-backed clip: pick the trimmed source-time and seek the element.
+    if (c.kind === 'video' && c.video && c.video.readyState >= 2) {
+      const vStart = c.videoStart ?? 0;
+      const vEnd = c.videoEnd ?? (isFinite(c.video.duration) ? c.video.duration : c.duration);
+      const target = vStart + (vEnd - vStart) * Math.max(0, Math.min(1, p));
+      // Only seek when we're noticeably off \u2014 setting currentTime every
+      // frame trashes the decoder pipeline on Safari and causes stutter.
+      if (Math.abs(c.video.currentTime - target) > 1 / 24) {
+        try {
+          c.video.currentTime = target;
+        } catch {
+          /* ignore \u2014 element may not be ready for seek yet */
+        }
+      }
+      drawCover(ctx, c.video, W, H, tr);
+      return;
+    }
     if (c.splitImage && c.splitMode && c.splitMode !== 'none') {
       drawSplitCover(ctx, c.image, c.splitImage, W, H, tr, c.splitMode);
     } else {

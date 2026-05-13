@@ -11,8 +11,19 @@ they're ready to grab when you have time.
 
 ## Recently shipped (in this branch)
 
-- ✅ **Video upload with frame extraction** — drop a `.mp4`/`.webm` and it
-  auto-splits into still frames for the timeline.
+- ✅ **True video upload (real playback, not stills)** — uploaded MP4 /
+  WebM files now become a single playable clip with the original motion
+  & sound. The renderer streams real video underneath both preview and
+  export. Replaces the older "extract evenly-spaced frames" upload mode.
+- ✅ **"None" effect (static, no motion)** — first-class option in the
+  Effect picker for clips that should sit perfectly still. The "Cut"
+  transition was also relabelled to "None (hard cut)" so creators find
+  the no-transition path immediately.
+- ✅ **Export corruption fix** — final ~200ms of the WebM was sometimes
+  truncated/garbled due to a recorder.stop() race. Now: single
+  contiguous chunk, post-render settle delay, defensive flush.
+- ✅ **Video upload with frame extraction** — *(superseded by the true
+  video upload above)*
 - ✅ **Caption customization** — color, stroke, font family, vertical
   position overrides that layer on top of the AI/preset styling.
 - ✅ **Project library (multi-save)** — save the current project as a

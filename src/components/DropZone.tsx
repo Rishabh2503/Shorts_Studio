@@ -1,11 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Box, LinearProgress, Stack, Typography } from '@mui/material';
 import CloudUploadRoundedIcon from '@mui/icons-material/CloudUploadRounded';
-import { extractVideoFrames } from '../engine/videoFrames';
+import { extractVideoPoster } from '../engine/videoFrames';
 
 interface Props {
   /** Called once per accepted image with its data URL + filename. */
   onImage: (dataUrl: string, name: string) => void;
+  /**
+   * Called once per accepted video with its decoded data URL, a poster
+   * thumbnail, the source duration in seconds, and the original filename.
+   */
+  onVideo?: (args: {
+    videoSrc: string;
+    poster: string;
+    duration: number;
+    name: string;
+  }) => void;
   /** Called with audio data URL + filename when an audio file is dropped. */
   onAudio?: (dataUrl: string, name: string) => void;
 }
@@ -14,15 +24,14 @@ interface Props {
  * Whole-window drag-and-drop overlay. Only renders the visual on a real drag-over
  * with files; otherwise it's an invisible event sink so nothing is intercepted.
  */
-export function DropZone({ onImage, onAudio }: Props) {
+export function DropZone({ onImage, onVideo, onAudio }: Props) {
   const [active, setActive] = useState(false);
   // When a video is being processed we show an overlay with progress so the
   // user knows the drop succeeded even after the drag-over visual fades.
   const [videoStatus, setVideoStatus] = useState<{
     name: string;
     pct: number;
-    captured: number;
-    total: number;
+    stage: string;
   } | null>(null);
 
   useEffect(() => {
@@ -56,26 +65,24 @@ export function DropZone({ onImage, onAudio }: Props) {
       for (const f of files) {
         try {
           if (f.type.startsWith('video/')) {
-            setVideoStatus({ name: f.name, pct: 0, captured: 0, total: 0 });
-            const frames = await extractVideoFrames(f, {
-              secondsPerFrame: 3,
-              minFrames: 2,
-              maxFrames: 20,
-              maxDimension: 1080,
-              onProgress: (p, captured, total) =>
-                setVideoStatus({
-                  name: f.name,
-                  pct: Math.round(p * 100),
-                  captured,
-                  total
-                })
+            // True video upload: read the whole file once for persistence,
+            // then grab a poster frame for the timeline thumbnail. We bail
+            // out silently if no onVideo handler is wired (extremely rare
+            // — the host app always provides one).
+            if (!onVideo) continue;
+            setVideoStatus({ name: f.name, pct: 5, stage: 'Reading file…' });
+            const videoSrc = await fileToDataUrl(f, (pct) => {
+              setVideoStatus({
+                name: f.name,
+                pct: 5 + Math.round(pct * 0.65),
+                stage: 'Reading file…'
+              });
             });
-            for (const frame of frames) {
-              onImage(
-                frame.dataUrl,
-                `${f.name} @ ${frame.sourceTime.toFixed(1)}s`
-              );
-            }
+            setVideoStatus({ name: f.name, pct: 75, stage: 'Capturing thumbnail…' });
+            const { poster, duration } = await extractVideoPoster(f, {
+              maxDimension: 1080
+            });
+            onVideo({ videoSrc, poster, duration, name: f.name });
           } else if (f.type.startsWith('image/')) {
             const url = await fileToDataUrl(f);
             onImage(url, f.name);
@@ -102,7 +109,7 @@ export function DropZone({ onImage, onAudio }: Props) {
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [onImage, onAudio]);
+  }, [onImage, onVideo, onAudio]);
 
   if (!active && !videoStatus) return null;
   return (
@@ -149,9 +156,7 @@ export function DropZone({ onImage, onAudio }: Props) {
               color="text.secondary"
               sx={{ textAlign: 'center' }}
             >
-              {videoStatus.total > 0
-                ? `Captured ${videoStatus.captured} of ${videoStatus.total} frames`
-                : `Decoding ${videoStatus.name}\u2026`}
+              {`${videoStatus.stage} — ${videoStatus.name}`}
             </Typography>
           </Stack>
         ) : (
@@ -164,10 +169,13 @@ export function DropZone({ onImage, onAudio }: Props) {
   );
 }
 
-function fileToDataUrl(file: File): Promise<string> {
+function fileToDataUrl(file: File, onProgress?: (pct: number) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onerror = () => reject(r.error ?? new Error('read-failed'));
+    r.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress((e.loaded / e.total) * 100);
+    };
     r.onload = () => resolve(r.result as string);
     r.readAsDataURL(file);
   });

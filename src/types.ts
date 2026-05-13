@@ -7,6 +7,10 @@
  */
 export type EffectId =
   | 'auto'
+  // No motion at all — the image just sits still for the clip duration.
+  // Useful for static photo intros, comparison shots, or when the user wants
+  // total control without any AI-picked Ken Burns / zoom on top.
+  | 'none'
   // Camera moves
   | 'kenburns'
   | 'kenburnsReverse'
@@ -137,6 +141,31 @@ export interface ImageClip {
   splitMode?: SplitMode;
   /** Prompt used to generate the split image (for re-rolls). */
   splitPrompt?: string;
+
+  /**
+   * Discriminates static-image clips from clips that wrap an uploaded video
+   * file. Defaults to `'image'` (or undefined for legacy projects). When set
+   * to `'video'`, the renderer ignores `src` for the live frame and instead
+   * draws frames from a hidden `<video>` element backed by `videoSrc`. The
+   * `src` field still holds a still poster frame so the timeline thumbnail
+   * + project thumbnails keep working without loading the full video.
+   */
+  kind?: 'image' | 'video';
+  /**
+   * Source video data URL (or remote URL) for `kind: 'video'` clips. The
+   * full file is preloaded into an `HTMLVideoElement` and seeked per render
+   * frame. Always omitted for image clips.
+   */
+  videoSrc?: string;
+  /**
+   * Inclusive trim window inside the source video, in seconds. `videoStart`
+   * defaults to 0 and `videoEnd` defaults to the source video's full
+   * duration. The clip's `duration` controls how long the trimmed section
+   * is stretched/compressed onto the timeline — equal values play the
+   * source at native speed.
+   */
+  videoStart?: number;
+  videoEnd?: number;
 }
 
 export interface ProjectAudio {
@@ -372,6 +401,7 @@ export const DEFAULT_PROJECT: ProjectState = {
 /** Pretty labels for every effect, for the picker UI. */
 export const EFFECT_LABELS: Record<EffectId, string> = {
   auto: 'AI Auto-pick',
+  none: 'None (static, no motion)',
   // Camera
   kenburns: 'Ken Burns',
   kenburnsReverse: 'Ken Burns Reverse',
@@ -436,6 +466,12 @@ export const EFFECT_LABELS: Record<EffectId, string> = {
  * and by the AI auto-picker to bias selections by prompt mood.
  */
 export const EFFECT_GROUPS: { label: string; effects: EffectId[] }[] = [
+  // Pinned at the top so creators who want a still photo can find it
+  // immediately instead of scrolling through the full motion list.
+  {
+    label: 'Static',
+    effects: ['none']
+  },
   {
     label: 'Camera',
     effects: [
@@ -504,7 +540,7 @@ export const EFFECT_GROUPS: { label: string; effects: EffectId[] }[] = [
 ];
 
 export const TRANSITION_LABELS: Record<TransitionId, string> = {
-  cut: 'Cut',
+  cut: 'None (hard cut)',
   fade: 'Fade',
   slide: 'Slide',
   whip: 'Whip Pan',

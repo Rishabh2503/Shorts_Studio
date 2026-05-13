@@ -26,6 +26,30 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-05-14-true-video-upload',
+    date: 'May 14, 2026',
+    title: 'Uploaded videos now play as actual video',
+    body:
+      'Drop in an MP4 / WebM and it becomes a single playable clip with the original motion + sound, instead of being chopped into still frames. The poster shown on the timeline is the first non-black frame; the renderer streams real video underneath during preview and export.',
+    kind: 'feature'
+  },
+  {
+    id: '2026-05-14-static-effect',
+    date: 'May 14, 2026',
+    title: 'New "Static" effect — turn off all motion',
+    body:
+      'Pick "None (static, no motion)" from the Effect picker on any clip to disable Ken Burns / zoom / shake entirely. The "Cut" transition was also relabelled to "None (hard cut)" so you can find the no-transition option faster.',
+    kind: 'improvement'
+  },
+  {
+    id: '2026-05-14-export-corruption-fix',
+    date: 'May 14, 2026',
+    title: 'Fixed corrupted export tail bytes',
+    body:
+      'Some browsers were emitting a broken last ~200ms in the exported WebM, so the final video looked truncated or wouldn\u2019t seek past the end. The recorder now flushes a single contiguous chunk and waits for the encoder to settle before stopping.',
+    kind: 'fix'
+  },
+  {
     id: '2026-05-13-project-library',
     date: 'May 13, 2026',
     title: 'Project Library \u2014 save multiple videos, never lose work',
