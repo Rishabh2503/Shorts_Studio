@@ -42,6 +42,11 @@ interface Props {
   onRemove: (id: string) => void;
   onMove: (id: string, dir: -1 | 1) => void;
   onDuplicate: (id: string) => void;
+  /**
+   * Reorder a clip via drag-and-drop. `from` and `to` are indexes into
+   * the clips array. Owner is expected to splice the array and persist.
+   */
+  onReorder?: (from: number, to: number) => void;
   /** Whether the global animated-caption overlay is enabled. */
   captionsEnabled: boolean;
 }
@@ -141,10 +146,32 @@ interface ClipThumbProps {
   end: number;
   selected: boolean;
   onSelect: (id: string) => void;
+  /** Drag handlers — only present when reorder is enabled. */
+  draggable?: boolean;
+  isDragging?: boolean;
+  isDropTarget?: boolean;
+  onDragStart?: (index: number) => void;
+  onDragEnter?: (index: number) => void;
+  onDragEnd?: () => void;
+  onDrop?: (index: number) => void;
 }
 
 const ClipThumb = memo(
-  function ClipThumb({ clip, index, start, end, selected, onSelect }: ClipThumbProps) {
+  function ClipThumb({
+    clip,
+    index,
+    start,
+    end,
+    selected,
+    onSelect,
+    draggable,
+    isDragging,
+    isDropTarget,
+    onDragStart,
+    onDragEnter,
+    onDragEnd,
+    onDrop
+  }: ClipThumbProps) {
     return (
       <Tooltip
         title={`#${index + 1} \u2022 ${fmt(start)} \u2192 ${fmt(end)} (${fmt(clip.duration)})`}
@@ -152,6 +179,36 @@ const ClipThumb = memo(
       >
         <Box
           onClick={() => onSelect(clip.id)}
+          draggable={draggable}
+          onDragStart={(e) => {
+            if (!draggable || !onDragStart) return;
+            // Use a custom MIME so non-Timeline drop targets (file dropzone)
+            // ignore us. Without setData() Firefox silently aborts the drag.
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('application/x-shorts-clip', String(index));
+            onDragStart(index);
+          }}
+          onDragEnter={(e) => {
+            if (!draggable || !onDragEnter) return;
+            e.preventDefault();
+            onDragEnter(index);
+          }}
+          onDragOver={(e) => {
+            if (!draggable) return;
+            // Required for onDrop to fire.
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+          }}
+          onDragEnd={() => {
+            if (!draggable || !onDragEnd) return;
+            onDragEnd();
+          }}
+          onDrop={(e) => {
+            if (!draggable || !onDrop) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onDrop(index);
+          }}
           sx={{
             position: 'relative',
             flex: '0 0 auto',
@@ -159,12 +216,16 @@ const ClipThumb = memo(
             height: 96,
             borderRadius: 2,
             overflow: 'hidden',
-            cursor: 'pointer',
+            cursor: draggable ? 'grab' : 'pointer',
+            opacity: isDragging ? 0.4 : 1,
+            // Visual indicator where the dragged clip will land.
+            outline: isDropTarget && !isDragging ? '2px dashed #22d3ee' : 'none',
+            outlineOffset: 1,
             border: selected
               ? '2px solid #a78bfa'
               : '1px solid rgba(255,255,255,0.12)',
             boxShadow: selected ? '0 0 0 4px rgba(167,139,250,0.18)' : 'none',
-            transition: 'all 120ms'
+            transition: 'opacity 120ms, outline-color 120ms, border-color 120ms'
           }}
         >
           <img
@@ -230,7 +291,10 @@ const ClipThumb = memo(
     prev.start === next.start &&
     prev.end === next.end &&
     prev.selected === next.selected &&
-    prev.onSelect === next.onSelect
+    prev.onSelect === next.onSelect &&
+    prev.draggable === next.draggable &&
+    prev.isDragging === next.isDragging &&
+    prev.isDropTarget === next.isDropTarget
 );
 
 export function Timeline({
@@ -241,9 +305,18 @@ export function Timeline({
   onRemove,
   onMove,
   onDuplicate,
+  onReorder,
   captionsEnabled
 }: Props) {
   const selected = clips.find((c) => c.id === selectedId) ?? null;
+
+  // ---- Drag-to-reorder state -------------------------------------------
+  // We use plain React state (no library) — HTML5 drag-and-drop is plenty
+  // for a horizontal list of <= a few dozen items, and avoids adding a
+  // 200KB dependency for one feature.
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dropIdx, setDropIdx] = useState<number | null>(null);
+  const canReorder = !!onReorder;
 
   // Compute cumulative start/end timestamps once per clip-list change.
   const timestamps = useMemo(() => {
@@ -266,6 +339,9 @@ export function Timeline({
         </Typography>
         <Typography variant="caption" color="text.secondary">
           {clips.length} clip{clips.length === 1 ? '' : 's'} • {fmt(totalDur)} total
+          {canReorder && clips.length > 1 && (
+            <span style={{ opacity: 0.6 }}> &nbsp;•&nbsp; drag a clip to reorder</span>
+          )}
         </Typography>
       </Box>
 
@@ -306,6 +382,28 @@ export function Timeline({
               end={ts.end}
               selected={selectedId === c.id}
               onSelect={onSelect}
+              draggable={canReorder}
+              isDragging={dragIdx === i}
+              isDropTarget={dropIdx === i && dragIdx !== null && dropIdx !== dragIdx}
+              onDragStart={(idx) => setDragIdx(idx)}
+              onDragEnter={(idx) => setDropIdx(idx)}
+              onDragEnd={() => {
+                setDragIdx(null);
+                setDropIdx(null);
+              }}
+              onDrop={(idx) => {
+                if (
+                  onReorder &&
+                  dragIdx !== null &&
+                  dragIdx !== idx &&
+                  dragIdx >= 0 &&
+                  idx >= 0
+                ) {
+                  onReorder(dragIdx, idx);
+                }
+                setDragIdx(null);
+                setDropIdx(null);
+              }}
             />
           );
         })}

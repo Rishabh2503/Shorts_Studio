@@ -1,8 +1,12 @@
+import { useState } from 'react';
 import {
   Alert,
   Autocomplete,
   Box,
   Button,
+  Chip,
+  CircularProgress,
+  Collapse,
   Divider,
   FormControlLabel,
   IconButton,
@@ -23,6 +27,8 @@ import DownloadIcon from '@mui/icons-material/Download';
 import TuneIcon from '@mui/icons-material/Tune';
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded';
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
+import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 import {
   CAPTION_ANIM_GROUPS,
   CAPTION_ANIM_LABELS,
@@ -32,6 +38,7 @@ import {
 import { newCaptionSeed } from '../engine/captionAi';
 import type { STTProgress } from '../engine/speechToText';
 import { CAPTION_PRESETS } from '../engine/captionPresets';
+import { generateHooks, generateShortsScript } from '../engine/aiText';
 
 interface Props {
   script: ProjectScript;
@@ -152,6 +159,65 @@ export function ScriptPanel({
   const hasTranscript =
     script.syncMode === 'transcript' && (script.wordTimes?.length ?? 0) > 0;
   const hasPastedText = script.text.trim().length > 0 && !hasTranscript;
+
+  // ---- AI Script Writer state -------------------------------------------
+  // Local-only state — we don't persist these between sessions because the
+  // *output* (the generated text) is what matters, and that lives on the
+  // project itself once the user clicks "Use this script".
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiTopic, setAiTopic] = useState('');
+  const [aiLength, setAiLength] = useState(30); // seconds
+  const [aiBusy, setAiBusy] = useState<null | 'script' | 'hooks'>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiHooks, setAiHooks] = useState<string[]>([]);
+
+  async function handleGenerateScript(append: boolean) {
+    if (!aiTopic.trim()) {
+      setAiError('Add a topic first — e.g. "5 iPhone hacks nobody knows".');
+      return;
+    }
+    setAiError(null);
+    setAiBusy('script');
+    try {
+      const out = await generateShortsScript(aiTopic.trim(), aiLength);
+      const nextText = append && script.text.trim()
+        ? `${script.text.trim()}\n\n${out}`
+        : out;
+      // Generated text doesn't have word-level timestamps; drop them and
+      // fall back to even/audio sync (matches the textarea-edit handler).
+      onChange({
+        ...script,
+        text: nextText,
+        wordTimes: undefined,
+        wordEnds: undefined,
+        syncMode: script.syncMode === 'transcript' ? 'even' : script.syncMode
+      });
+    } catch (e) {
+      setAiError(
+        (e as Error).message ||
+          'Could not reach the script writer right now. Try again in a moment.'
+      );
+    } finally {
+      setAiBusy(null);
+    }
+  }
+
+  async function handleGenerateHooks() {
+    if (!aiTopic.trim()) {
+      setAiError('Add a topic first — e.g. "morning routine for productivity".');
+      return;
+    }
+    setAiError(null);
+    setAiBusy('hooks');
+    try {
+      const hooks = await generateHooks(aiTopic.trim(), 5);
+      setAiHooks(hooks);
+    } catch (e) {
+      setAiError((e as Error).message || 'Failed to generate hooks.');
+    } finally {
+      setAiBusy(null);
+    }
+  }
 
   // Compose a friendly status line for the loader. First-time users wait on
   // the model download (~40-150MB depending on quantization), so we want a
@@ -357,6 +423,176 @@ export function ScriptPanel({
           The video stretches to the audio length and words follow the speech
           rhythm so captions stay in step.
         </Typography>
+
+        {/* ---- AI Script Writer (collapsible) ------------------------------ */}
+        <Box
+          sx={{
+            mb: 1,
+            borderRadius: 1.5,
+            border: '1px dashed rgba(167,139,250,0.45)',
+            background: 'rgba(167,139,250,0.05)'
+          }}
+        >
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1}
+            sx={{ p: 0.75, cursor: 'pointer' }}
+            onClick={() => setAiOpen((o) => !o)}
+          >
+            <AutoAwesomeRoundedIcon
+              fontSize="small"
+              sx={{ color: '#a78bfa' }}
+            />
+            <Typography variant="caption" sx={{ fontWeight: 700, flex: 1 }}>
+              Write with AI — script + hook generator
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {aiOpen ? 'Hide ▾' : 'Show ▸'}
+            </Typography>
+          </Stack>
+          <Collapse in={aiOpen} timeout="auto" unmountOnExit>
+            <Box sx={{ p: 1, pt: 0 }}>
+              <Stack
+                direction={{ xs: 'column', md: 'row' }}
+                spacing={1}
+                alignItems={{ xs: 'stretch', md: 'flex-end' }}
+              >
+                <TextField
+                  size="small"
+                  label="Topic / video idea"
+                  placeholder="e.g. 5 Apple Watch features nobody uses"
+                  fullWidth
+                  value={aiTopic}
+                  onChange={(e) => setAiTopic(e.target.value)}
+                  disabled={!!aiBusy}
+                />
+                <TextField
+                  size="small"
+                  label="Length"
+                  type="number"
+                  value={aiLength}
+                  onChange={(e) =>
+                    setAiLength(
+                      Math.max(10, Math.min(90, parseInt(e.target.value || '30', 10)))
+                    )
+                  }
+                  inputProps={{ min: 10, max: 90, step: 5 }}
+                  sx={{ width: 110 }}
+                  disabled={!!aiBusy}
+                  helperText="sec"
+                />
+              </Stack>
+              <Stack direction="row" spacing={1} mt={1} flexWrap="wrap">
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={
+                    aiBusy === 'script' ? (
+                      <CircularProgress size={14} color="inherit" />
+                    ) : (
+                      <AutoAwesomeRoundedIcon />
+                    )
+                  }
+                  onClick={() => handleGenerateScript(false)}
+                  disabled={!!aiBusy}
+                  sx={{
+                    background:
+                      'linear-gradient(135deg,#a78bfa 0%,#22d3ee 100%)'
+                  }}
+                >
+                  {aiBusy === 'script' ? 'Writing…' : 'Generate script'}
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => handleGenerateScript(true)}
+                  disabled={!!aiBusy || !script.text.trim()}
+                  sx={{
+                    borderColor: 'rgba(167,139,250,0.6)',
+                    color: '#a78bfa'
+                  }}
+                >
+                  Append to existing
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={
+                    aiBusy === 'hooks' ? (
+                      <CircularProgress size={14} color="inherit" />
+                    ) : (
+                      <BoltRoundedIcon />
+                    )
+                  }
+                  onClick={handleGenerateHooks}
+                  disabled={!!aiBusy}
+                  sx={{
+                    borderColor: 'rgba(34,211,238,0.6)',
+                    color: '#22d3ee'
+                  }}
+                >
+                  {aiBusy === 'hooks' ? 'Brewing…' : '5 hook ideas'}
+                </Button>
+              </Stack>
+              {aiError && (
+                <Alert severity="warning" sx={{ mt: 1, fontSize: 12 }}>
+                  {aiError}
+                </Alert>
+              )}
+              {aiHooks.length > 0 && (
+                <Box mt={1}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
+                    mb={0.5}
+                  >
+                    Tap a hook to copy it to the top of your script:
+                  </Typography>
+                  <Stack spacing={0.5}>
+                    {aiHooks.map((h, i) => (
+                      <Chip
+                        key={i}
+                        label={h}
+                        size="small"
+                        clickable
+                        onClick={() => {
+                          const next = script.text.trim()
+                            ? `${h}\n\n${script.text.trim()}`
+                            : h;
+                          onChange({
+                            ...script,
+                            text: next,
+                            wordTimes: undefined,
+                            wordEnds: undefined,
+                            syncMode:
+                              script.syncMode === 'transcript'
+                                ? 'even'
+                                : script.syncMode
+                          });
+                        }}
+                        sx={{
+                          maxWidth: '100%',
+                          height: 'auto',
+                          py: 0.5,
+                          justifyContent: 'flex-start',
+                          '& .MuiChip-label': {
+                            whiteSpace: 'normal',
+                            textAlign: 'left',
+                            fontSize: 11.5,
+                            lineHeight: 1.3
+                          }
+                        }}
+                      />
+                    ))}
+                  </Stack>
+                </Box>
+              )}
+            </Box>
+          </Collapse>
+        </Box>
+
         <TextField
           multiline
           minRows={3}

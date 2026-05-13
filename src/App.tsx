@@ -24,6 +24,7 @@ import SubtitlesIcon from '@mui/icons-material/Subtitles';
 import AspectRatioIcon from '@mui/icons-material/AspectRatio';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
+import FolderOpenRoundedIcon from '@mui/icons-material/FolderOpenRounded';
 import { v4 as uuid } from 'uuid';
 import {
   ASPECT_RATIOS,
@@ -59,6 +60,16 @@ const TranscriptEditorDialog = lazy(() =>
 const UserGuideDialog = lazy(() =>
   import('./components/UserGuideDialog').then((m) => ({
     default: m.UserGuideDialog
+  }))
+);
+/**
+ * Project library dialog \u2014 multi-save UI plus templates gallery. Lazy
+ * because it's a moderately heavy component (image thumbnails, template
+ * cards) that's only opened on demand.
+ */
+const ProjectLibraryDialog = lazy(() =>
+  import('./components/ProjectLibraryDialog').then((m) => ({
+    default: m.ProjectLibraryDialog
   }))
 );
 import { ExportButton } from './components/ExportButton';
@@ -121,6 +132,12 @@ function AppInner() {
   const [ratioMenuAnchor, setRatioMenuAnchor] = useState<HTMLElement | null>(null);
   /** Controls visibility of the full-page user guide dialog. */
   const [guideOpen, setGuideOpen] = useState(false);
+  /**
+   * Controls visibility of the project library dialog. The dialog manages
+   * its own list state (loaded from IDB on open), so we only track the
+   * open/close flag here.
+   */
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   // ---- Autosave / restore ---------------------------------------------------
   //
@@ -701,6 +718,29 @@ function AppInner() {
     });
   }
 
+  /**
+   * Drop-target reorder used by the timeline's drag-and-drop UI. Unlike
+   * `moveClip` (which steps by one), this jumps the clip from `from` to
+   * `to` directly. Bounds-checked so a stale event can't crash setState.
+   */
+  function reorderClips(from: number, to: number) {
+    setProject((p) => {
+      if (
+        from < 0 ||
+        from >= p.clips.length ||
+        to < 0 ||
+        to >= p.clips.length ||
+        from === to
+      ) {
+        return p;
+      }
+      const arr = [...p.clips];
+      const [moved] = arr.splice(from, 1);
+      arr.splice(to, 0, moved);
+      return { ...p, clips: arr };
+    });
+  }
+
   function duplicateClip(id: string) {
     setProject((p) => {
       const i = p.clips.findIndex((c) => c.id === id);
@@ -857,6 +897,28 @@ function AppInner() {
             */}
             <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
               <NotificationsMenu />
+              <Tooltip
+                title="Project library \u2014 save multiple drafts and switch between them"
+                placement="bottom"
+                arrow
+              >
+                <IconButton
+                  size="small"
+                  onClick={() => setLibraryOpen(true)}
+                  aria-label="Open project library"
+                  aria-haspopup="dialog"
+                  sx={{
+                    color: 'text.secondary',
+                    transition: 'color 160ms ease',
+                    '&:hover': {
+                      color: '#a78bfa',
+                      background: 'rgba(167,139,250,0.10)'
+                    }
+                  }}
+                >
+                  <FolderOpenRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
               <Tooltip title="User guide \u2014 how to use Shorts Studio" placement="bottom" arrow>
                 <IconButton
                   size="small"
@@ -1110,6 +1172,7 @@ function AppInner() {
                 onUpdate={updateClip}
                 onRemove={removeClip}
                 onMove={moveClip}
+                onReorder={reorderClips}
                 onDuplicate={duplicateClip}
                 captionsEnabled={project.captionsEnabled}
               />
@@ -1179,6 +1242,37 @@ function AppInner() {
       {guideOpen && (
         <Suspense fallback={null}>
           <UserGuideDialog open={guideOpen} onClose={() => setGuideOpen(false)} />
+        </Suspense>
+      )}
+
+      {/*
+        Project library dialog \u2014 multi-save UI. Opens with a snapshot
+        list (loaded from IDB on first open) plus the template gallery.
+        Loading a project replaces the live state; the previous draft is
+        NOT auto-saved on top of it, so users have to save explicitly if
+        they want to keep it. The autosave key (`project:current`) tracks
+        the active draft.
+      */}
+      {libraryOpen && (
+        <Suspense fallback={null}>
+          <ProjectLibraryDialog
+            open={libraryOpen}
+            onClose={() => setLibraryOpen(false)}
+            currentProject={project}
+            onLoad={(loaded) => {
+              // Reset transient editor state so the new project doesn't
+              // inherit selection / time / errors from the previous one.
+              setProject(loaded);
+              setSelectedId(null);
+              setTime(0);
+              setPlaying(false);
+              setAudioPeaks(null);
+              setTranscribing(false);
+              setTranscribeProgress(null);
+              setTranscribeError(null);
+            }}
+            onNotify={(msg, level) => toast.show(msg, level)}
+          />
         </Suspense>
       )}
     </Box>
