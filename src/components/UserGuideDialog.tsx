@@ -23,6 +23,11 @@ import ViewColumnRoundedIcon from '@mui/icons-material/ViewColumnRounded';
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded';
 import KeyboardRoundedIcon from '@mui/icons-material/KeyboardRounded';
 import LightbulbRoundedIcon from '@mui/icons-material/LightbulbRounded';
+import MovieFilterRoundedIcon from '@mui/icons-material/MovieFilterRounded';
+import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded';
+import LibraryAddCheckRoundedIcon from '@mui/icons-material/LibraryAddCheckRounded';
+import DesignServicesRoundedIcon from '@mui/icons-material/DesignServicesRounded';
+import SwapVertRoundedIcon from '@mui/icons-material/SwapVertRounded';
 
 /**
  * Information architecture for the user-guide page.
@@ -51,7 +56,51 @@ const SECTIONS: GuideSection[] = [
       'Drop an audio file (or record one) into the Audio panel \u2014 captions will auto-sync.',
       'Hit the glowing "Render & download" button under the preview to export a WebM.'
     ],
-    tip: 'Drag and drop images or audio directly anywhere on the page \u2014 the drop zone auto-routes them.'
+    tip: 'Drag and drop images, video files, or audio anywhere on the page \u2014 the drop zone auto-routes them.'
+  },
+  {
+    id: 'library',
+    title: 'Project Library \u2014 save & switch between drafts',
+    icon: <LibraryAddCheckRoundedIcon />,
+    intro:
+      'Save snapshots of your project so you never lose work. Open the library from the bookshelf icon in the header.',
+    steps: [
+      'Click "Save current as new" to capture the project as a new entry \u2014 your current edits keep going.',
+      'Click "Overwrite" on any saved draft to update it with the latest state.',
+      'Use "Open" to load a saved draft back into the editor (your current work is auto-saved to the active project first).',
+      '"Duplicate" copies a draft to iterate on without touching the original.',
+      'Rename, delete, or download any saved project as a .json backup.'
+    ],
+    tip: 'Save before risky experiments (different audio, restructured timeline) so you can always revert.'
+  },
+  {
+    id: 'templates',
+    title: 'Project templates \u2014 start in one click',
+    icon: <DesignServicesRoundedIcon />,
+    intro:
+      'Six ready-to-go scaffolds: Top-5 List, Before/After, Tutorial, Story-time, Quote Reel, and Product Showcase. Each loads a starter script and the right clip count.',
+    steps: [
+      'In the Script panel, open the AI Writer card.',
+      'Click any template chip to scaffold the project.',
+      'Edit the placeholder script to match your topic.',
+      'Add images / videos to fill in each pre-created clip slot.'
+    ],
+    tip: 'Templates are also a great way to learn the optimal structure for a 30-second Short.'
+  },
+  {
+    id: 'ai-writer',
+    title: 'AI Script Writer + Hook Generator',
+    icon: <AutoAwesomeIcon />,
+    intro:
+      'Type a topic and let AI write a 3-part Short for you (Hook \u2192 Body \u2192 CTA), or generate 5 scroll-stopping hooks to pick from. Free, key-less, via Pollinations.',
+    steps: [
+      'Open the Script panel and find the "AI Script Writer" card.',
+      'Type your topic, e.g. "Why most people fail their morning routine".',
+      'Click "Write full script" \u2014 the result drops straight into the script box, already structured.',
+      'Or click "5 hooks" to get five different opening lines and pick the strongest.',
+      'Once you have a script, hit "Sync pasted text to audio" to align words with your voiceover.'
+    ],
+    tip: 'The first 3 seconds of a Short decide retention. Spend extra time refining the hook.'
   },
   {
     id: 'aspect',
@@ -80,6 +129,33 @@ const SECTIONS: GuideSection[] = [
       'Click the clip to set duration, transitions, motion, and per-clip captions.'
     ],
     tip: 'Trending presets at the bottom are one-tap starting points.'
+  },
+  {
+    id: 'video-upload',
+    title: 'Upload your own image or video',
+    icon: <MovieFilterRoundedIcon />,
+    intro:
+      'Bring footage you already have. Images become clips directly; videos are sampled into evenly-spaced frames so every effect, transition, and caption keeps working.',
+    steps: [
+      'In the Media panel, click "Upload image(s) or video" \u2014 or simply drag the file onto the page.',
+      'Images appear immediately on the timeline.',
+      'Videos go through a frame extractor: roughly one frame every ~3 seconds (min 2, max 20 frames).',
+      'Each extracted frame becomes its own clip with the standard 3-second duration \u2014 edit timing, effects, and captions per-clip as usual.'
+    ],
+    tip: 'MP4 (H.264) and WebM (VP9) work in every modern browser. AV1 / HEVC may fail in Firefox.'
+  },
+  {
+    id: 'reorder',
+    title: 'Drag clips to reorder',
+    icon: <SwapVertRoundedIcon />,
+    intro:
+      'Restructure your video without deleting and re-adding clips.',
+    steps: [
+      'Grab any clip thumbnail in the timeline.',
+      'Drag it left or right \u2014 a dashed outline shows where it will land.',
+      'Release to drop. Audio, captions, and word timings all stay in sync.'
+    ],
+    tip: 'Reordering also works great when paired with the Project Library \u2014 save before rearranging.'
   },
   {
     id: 'split',
@@ -124,6 +200,21 @@ const SECTIONS: GuideSection[] = [
     tip: 'You can paste a pre-written script and click "Sync to audio" \u2014 the model aligns your words to the timing.'
   },
   {
+    id: 'caption-style',
+    title: 'Customize caption color, font and position',
+    icon: <PaletteRoundedIcon />,
+    intro:
+      'Lock a specific brand color, font, or screen position \u2014 while keeping AI suggestions for everything else.',
+    steps: [
+      'Scroll to the bottom of the Script panel: "Customize caption look (optional)".',
+      'Pick a fill / stroke color with the OS color picker, or tap one of the suggested swatches.',
+      'Choose a font family from the curated dropdown (Inter, Impact, Georgia, etc.). "AI / preset default" returns control to the AI.',
+      'Snap caption position to Top / Middle / Lower-third / Bottom, or fine-tune with the 5%\u201395% slider.',
+      'Use the reset icon to clear all overrides at once \u2014 AI / preset takes over again.'
+    ],
+    tip: 'All four fields are independent. Lock just your brand color and let AI keep picking the font + animation.'
+  },
+  {
     id: 'export',
     title: 'Rendering & downloading',
     icon: <DownloadRoundedIcon />,
@@ -135,7 +226,7 @@ const SECTIONS: GuideSection[] = [
       'Wait for the full video length \u2014 recording is real-time so audio stays perfectly in sync.',
       'The .webm file is saved automatically. Drop it straight into YouTube Studio.'
     ],
-    tip: 'WebM uploads directly to YouTube. For Instagram / TikTok, convert to MP4 with a free tool like CloudConvert.'
+    tip: 'WebM uploads directly to YouTube. For Instagram / TikTok, convert to MP4 with a free tool like CloudConvert. (Native MP4 export is on the roadmap \u2014 see BACKLOG.md in the repo.)'
   }
 ];
 

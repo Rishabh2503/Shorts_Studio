@@ -26,6 +26,54 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-05-13-project-library',
+    date: 'May 13, 2026',
+    title: 'Project Library \u2014 save multiple videos, never lose work',
+    body:
+      'Save a snapshot of any project before risky edits. Switch freely between drafts, duplicate winners, rename, delete, or revert to any saved version. Click the library icon in the header to open it.',
+    kind: 'feature'
+  },
+  {
+    id: '2026-05-13-ai-script-writer',
+    date: 'May 13, 2026',
+    title: 'AI Script Writer + Hook Generator',
+    body:
+      'Type a topic and let AI write a 3-part Short for you (Hook \u2192 Body \u2192 CTA), or generate 5 scroll-stopping hooks to pick from. Powered by Pollinations \u2014 free and key-less.',
+    kind: 'feature'
+  },
+  {
+    id: '2026-05-13-project-templates',
+    date: 'May 13, 2026',
+    title: 'Project templates \u2014 start in one click',
+    body:
+      '6 ready-to-go scaffolds: Top-5 List, Before/After, Tutorial, Story-time, Quote Reel, and Product Showcase. Each loads a starter script + clip count tuned for that format.',
+    kind: 'feature'
+  },
+  {
+    id: '2026-05-13-drag-reorder',
+    date: 'May 13, 2026',
+    title: 'Drag clips to reorder the timeline',
+    body:
+      'Grab any clip thumbnail and drop it where you want \u2014 finally a proper way to restructure your video without delete + re-add gymnastics.',
+    kind: 'feature'
+  },
+  {
+    id: '2026-05-13-video-upload',
+    date: 'May 13, 2026',
+    title: 'Video upload \u2014 import MP4 or WebM',
+    body:
+      'Drop a video file and Shorts Studio extracts evenly-spaced frames, turning each into a clip with full effect/caption/transition support. MP4 (H.264) and WebM work best.',
+    kind: 'feature'
+  },
+  {
+    id: '2026-05-13-caption-custom',
+    date: 'May 13, 2026',
+    title: 'Customize caption color, font and position',
+    body:
+      'New "Customize" controls in the Script panel: pick any color (or use the suggested swatches), choose a font family, and snap captions to top / middle / lower-third \u2014 or fine-tune with the slider. AI still suggests when fields are left blank.',
+    kind: 'feature'
+  },
+  {
     id: '2026-05-12-seo-pwa',
     date: 'May 12, 2026',
     title: 'Installable app, social previews & faster loads',
