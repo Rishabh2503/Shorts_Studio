@@ -9,10 +9,22 @@
 export const config = { runtime: 'edge' };
 
 const UPSTREAM = 'https://lexica.art/api';
+// Only the search endpoint is needed by the client.
+const ALLOWED_PREFIXES = ['/v1/search'];
 
 export default async function handler(req: Request): Promise<Response> {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return new Response('Method not allowed', {
+      status: 405,
+      headers: { Allow: 'GET, HEAD' }
+    });
+  }
+
   const url = new URL(req.url);
   const upstreamPath = url.pathname.replace(/^\/api\/lexica/, '') || '/';
+  if (!ALLOWED_PREFIXES.some((p) => upstreamPath.startsWith(p))) {
+    return new Response('Forbidden path', { status: 403 });
+  }
   const target = `${UPSTREAM}${upstreamPath}${url.search}`;
 
   try {

@@ -20,21 +20,44 @@
 export const config = { runtime: 'edge' };
 
 const UPSTREAM = 'https://image.pollinations.ai';
+// Only forward requests under these prefixes — stops the proxy being used
+// as a generic GET tunnel into arbitrary upstream endpoints.
+const ALLOWED_PREFIXES = ['/prompt/', '/models', '/feed'];
 
 export default async function handler(req: Request): Promise<Response> {
+  // Only safe, idempotent methods. Blocks the proxy from being abused as a
+  // POST/DELETE relay against the upstream.
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return new Response('Method not allowed', {
+      status: 405,
+      headers: { Allow: 'GET, HEAD' }
+    });
+  }
+
   const url = new URL(req.url);
   // Strip the leading "/api/poll" prefix so we hit the upstream's actual path.
   const upstreamPath = url.pathname.replace(/^\/api\/poll/, '') || '/';
+
+  // Path allow-list. Without this the proxy would happily forward
+  // /api/poll/anything-at-all through to image.pollinations.ai — fine for
+  // legitimate use, but it gives anyone a free same-origin GET tunnel
+  // they can use to hit expensive / rate-limited routes through your
+  // Vercel edge quota.
+  const allowed = ALLOWED_PREFIXES.some((p) => upstreamPath.startsWith(p));
+  if (!allowed) {
+    return new Response('Forbidden path', { status: 403 });
+  }
+
   const target = `${UPSTREAM}${upstreamPath}${url.search}`;
 
-  // Forward only the headers we trust. Stripping Cookie / Auth from the
-  // browser prevents accidental credential leaks; we add our own Bearer
-  // token if the client included one.
+  // Forward only the headers we trust. We deliberately do NOT forward the
+  // client's Authorization header — a malicious page on the same origin
+  // could otherwise use the proxy to exfiltrate any bearer token the user
+  // pasted into a different app sharing this deployment. If/when upstream
+  // auth is required, wire it in here from a server-side env var instead.
   const fwdHeaders: Record<string, string> = {
     Accept: req.headers.get('Accept') ?? 'image/*'
   };
-  const auth = req.headers.get('Authorization');
-  if (auth) fwdHeaders.Authorization = auth;
 
   try {
     const upstream = await fetch(target, {
