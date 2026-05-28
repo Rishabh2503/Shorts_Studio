@@ -2,26 +2,38 @@ import { useState } from 'react';
 import {
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
+  FormControlLabel,
   LinearProgress,
   MenuItem,
+  Slider,
   Stack,
   TextField,
   Typography
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import AutoStoriesRoundedIcon from '@mui/icons-material/AutoStoriesRounded';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import MovieFilterRoundedIcon from '@mui/icons-material/MovieFilterRounded';
 import { generateImage, TRENDING_PROMPTS, type ImageSource } from '../engine/ai';
 import { extractVideoPoster } from '../engine/videoFrames';
+import {
+  generateSceneList,
+  generateStorySceneImages,
+  MAX_SCENES,
+  MIN_SCENES
+} from '../engine/storyScenes';
 
 interface Props {
   /**
    * Adds a still image clip. `prompt` is stored on the clip for re-rolls
-   * and shown as the timeline tooltip.
+   * and shown as the timeline tooltip. `durationSec` (optional) overrides
+   * the default 3s clip length — used by the Story Scenes flow so all
+   * generated clips evenly fit the audio.
    */
-  onAddImage: (src: string, prompt?: string) => void;
+  onAddImage: (src: string, prompt?: string, durationSec?: number) => void;
   /**
    * Adds an uploaded video as a single video-backed clip. The renderer
    * draws live frames from `videoSrc`; `poster` is the still thumbnail
@@ -33,6 +45,13 @@ interface Props {
     duration: number;
     name: string;
   }) => void;
+  /**
+   * Effective audio trim length (seconds), if any. When present, the
+   * "Match audio duration" checkbox in Story Scenes is enabled and the
+   * generated clips will each be `audioDurationSec / count` long so the
+   * full sequence fits the audio exactly.
+   */
+  audioDurationSec?: number;
 }
 
 // Pollinations deprecated `flux-realism` and `flux-anime` (their /models
@@ -58,7 +77,7 @@ const SOURCES: { value: ImageSource; label: string; hint: string }[] = [
   { value: 'picsum', label: 'Stock photo (random)', hint: 'Random photo, no AI — last-resort' }
 ];
 
-export function MediaPanel({ onAddImage, onAddVideo }: Props) {
+export function MediaPanel({ onAddImage, onAddVideo, audioDurationSec }: Props) {
   const [prompt, setPrompt] = useState('');
   const [style, setStyle] = useState<typeof STYLES[number]['value']>('auto');
   const [source, setSource] = useState<ImageSource>('auto');
@@ -74,6 +93,65 @@ export function MediaPanel({ onAddImage, onAddVideo }: Props) {
     pct: number; // 0..100
     stage: string;
   } | null>(null);
+
+  // ----- Story Scenes (auto-generate a sequence of images from one topic) ---
+  // The user provides a topic / line of script (e.g. "twinkle twinkle little
+  // star") and we ask the free Pollinations text endpoint to expand it into
+  // N visually distinct scene prompts, then render each as an image and
+  // drop the clips on the timeline in order. If audio is loaded and
+  // "Match audio duration" is checked, each clip's duration is set to
+  // audioDurationSec/N so the slideshow ends exactly with the music.
+  const [sceneTopic, setSceneTopic] = useState('');
+  const [sceneCount, setSceneCount] = useState(5);
+  const [matchAudio, setMatchAudio] = useState(true);
+  const [sceneBusy, setSceneBusy] = useState(false);
+  const [sceneStatus, setSceneStatus] = useState('');
+  const [sceneProgress, setSceneProgress] = useState<{ done: number; total: number } | null>(null);
+  const [sceneError, setSceneError] = useState<string | null>(null);
+
+  async function handleGenerateScenes() {
+    const topic = sceneTopic.trim();
+    if (!topic) return;
+    setSceneBusy(true);
+    setSceneError(null);
+    setSceneStatus('Planning scenes…');
+    setSceneProgress({ done: 0, total: sceneCount });
+    try {
+      // Step 1: ask the free text model for N scene descriptions.
+      const scenes = await generateSceneList({ topic, count: sceneCount });
+      // Step 2: per-clip duration. If the user wants the slideshow to
+      // exactly match an already-loaded audio track, split evenly. Else
+      // fall back to a comfortable 3s per scene.
+      const perClip =
+        matchAudio && audioDurationSec && audioDurationSec > 0
+          ? Math.max(0.5, audioDurationSec / scenes.length)
+          : 3;
+
+      // Step 3: generate each image sequentially. The image cascade in
+      // ai.ts already retries / falls back across providers, so individual
+      // scene failures show up as empty strings which we just skip.
+      await generateStorySceneImages({
+        scenes,
+        imageOpts: { style, source },
+        onSceneStart: (i, total, p) => {
+          setSceneStatus(`Generating scene ${i}/${total}: ${truncate(p, 60)}`);
+          setSceneProgress({ done: i - 1, total });
+        },
+        onSceneReady: (i, total, url) => {
+          if (url) onAddImage(url, scenes[i - 1], perClip);
+          setSceneProgress({ done: i, total });
+        }
+      });
+      setSceneStatus(`Done — added ${scenes.length} scene${scenes.length === 1 ? '' : 's'}.`);
+      setSceneProgress(null);
+    } catch (e) {
+      setSceneError((e as Error).message || 'Scene generation failed.');
+      setSceneStatus('');
+      setSceneProgress(null);
+    } finally {
+      setSceneBusy(false);
+    }
+  }
 
   async function handleGenerate(p: string) {
     if (!p.trim()) return;
@@ -162,18 +240,18 @@ export function MediaPanel({ onAddImage, onAddVideo }: Props) {
   async function importVideoFile(file: File): Promise<void> {
     setError(null);
     setVideoProgress({ name: file.name, pct: 10, stage: 'Reading file…' });
+    // Use a blob: URL instead of a base64 data URL. Reading a 50 MB video
+    // as a data URL bloats it to ~67 MB of in-memory string and makes the
+    // tab feel locked up for several seconds. Blob URLs reference the
+    // underlying File without copying bytes — near-instant, and the
+    // browser streams the video from disk on demand.
+    //
+    // Tradeoff: blob URLs die on page reload, so projects saved with
+    // video clips currently re-load with a missing video source. That's
+    // a session-scope limitation we'll fix with proper File persistence
+    // in IndexedDB later (tracked in BACKLOG).
+    const videoSrc = URL.createObjectURL(file);
     try {
-      // Use a blob: URL instead of a base64 data URL. Reading a 50 MB video
-      // as a data URL bloats it to ~67 MB of in-memory string and makes the
-      // tab feel locked up for several seconds. Blob URLs reference the
-      // underlying File without copying bytes — near-instant, and the
-      // browser streams the video from disk on demand.
-      //
-      // Tradeoff: blob URLs die on page reload, so projects saved with
-      // video clips currently re-load with a missing video source. That's
-      // a session-scope limitation we'll fix with proper File persistence
-      // in IndexedDB later (tracked in BACKLOG).
-      const videoSrc = URL.createObjectURL(file);
       setVideoProgress({ name: file.name, pct: 50, stage: 'Capturing thumbnail…' });
       const { poster, duration } = await extractVideoPoster(file, { maxDimension: 1080 });
       onAddVideo({
@@ -182,9 +260,17 @@ export function MediaPanel({ onAddImage, onAddVideo }: Props) {
         duration,
         name: file.name
       });
-      setVideoProgress({ name: file.name, pct: 100, stage: 'Done' });
-    } finally {
+      // Clear the progress UI on success. We intentionally do NOT set
+      // pct=100 inside `finally` — doing that previously was overwritten
+      // by `null` in the same microtask, so users never saw the "Done"
+      // frame. Errors propagate so the caller's catch can clean up.
       setVideoProgress(null);
+    } catch (err) {
+      // Revoke the blob URL we just minted if anything failed — otherwise
+      // the underlying File blob leaks for the life of the tab.
+      try { URL.revokeObjectURL(videoSrc); } catch { /* ignore */ }
+      setVideoProgress(null);
+      throw err;
     }
   }
 
@@ -348,6 +434,124 @@ export function MediaPanel({ onAddImage, onAddVideo }: Props) {
           </Stack>
         </Stack>
       </Box>
+
+      {/* ---- Story Scenes (auto-generate a sequence of images) ---- */}
+      <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.08)', pt: 2 }}>
+        <Stack spacing={1.25}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <AutoStoriesRoundedIcon sx={{ color: '#a78bfa' }} fontSize="small" />
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Story Scenes (auto)
+            </Typography>
+          </Stack>
+          <Typography variant="caption" color="text.secondary">
+            Type a topic or a line of script — we'll generate {MIN_SCENES}–{MAX_SCENES}
+            {' '}image scenes and drop them on the timeline in order. Free, no key needed.
+          </Typography>
+
+          <TextField
+            label="Topic or script line"
+            placeholder='e.g. "twinkle twinkle little star" or "how solar panels work"'
+            value={sceneTopic}
+            onChange={(e) => setSceneTopic(e.target.value)}
+            multiline
+            minRows={2}
+            fullWidth
+            size="small"
+            disabled={sceneBusy}
+          />
+
+          <Box>
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Typography variant="caption" color="text.secondary">
+                Number of scenes
+              </Typography>
+              <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                {sceneCount}
+              </Typography>
+            </Stack>
+            <Slider
+              size="small"
+              min={MIN_SCENES}
+              max={MAX_SCENES}
+              step={1}
+              marks
+              value={sceneCount}
+              onChange={(_, v) => setSceneCount(v as number)}
+              disabled={sceneBusy}
+              sx={{ color: '#a78bfa' }}
+            />
+          </Box>
+
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                checked={matchAudio && !!audioDurationSec}
+                onChange={(_, v) => setMatchAudio(v)}
+                disabled={sceneBusy || !audioDurationSec}
+              />
+            }
+            label={
+              <Typography variant="caption" color="text.secondary">
+                {audioDurationSec
+                  ? `Match audio duration (${audioDurationSec.toFixed(1)}s → ${(
+                      audioDurationSec / sceneCount
+                    ).toFixed(1)}s per scene)`
+                  : 'Match audio duration (load audio first)'}
+              </Typography>
+            }
+            sx={{ ml: 0 }}
+          />
+
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={
+              sceneBusy ? (
+                <CircularProgress size={18} color="inherit" />
+              ) : (
+                <AutoStoriesRoundedIcon />
+              )
+            }
+            onClick={handleGenerateScenes}
+            disabled={sceneBusy || !sceneTopic.trim()}
+          >
+            {sceneBusy ? 'Generating scenes…' : `Generate ${sceneCount} scenes`}
+          </Button>
+
+          {sceneProgress && (
+            <Box>
+              <LinearProgress
+                variant="determinate"
+                value={(sceneProgress.done / Math.max(1, sceneProgress.total)) * 100}
+                sx={{ height: 6, borderRadius: 3 }}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', mt: 0.5 }}
+              >
+                {`Scene ${sceneProgress.done}/${sceneProgress.total}`}
+              </Typography>
+            </Box>
+          )}
+          {sceneStatus && !sceneError && (
+            <Typography variant="caption" color="text.secondary">
+              {sceneStatus}
+            </Typography>
+          )}
+          {sceneError && (
+            <Typography variant="caption" color="error">
+              {sceneError}
+            </Typography>
+          )}
+        </Stack>
+      </Box>
     </Stack>
   );
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }

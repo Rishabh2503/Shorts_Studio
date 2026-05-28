@@ -198,7 +198,7 @@ export function cleanModelOutput(text: string): string {
   return out;
 }
 
-function parseNumberedList(text: string, expected: number): string[] {
+export function parseNumberedList(text: string, expected: number): string[] {
   // Match "1. ..." or "1) ..." anchors. Capture everything up to the next
   // numbered anchor or end of string.
   const items: string[] = [];
