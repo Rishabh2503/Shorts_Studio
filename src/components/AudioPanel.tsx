@@ -14,6 +14,7 @@ import HeadphonesIcon from '@mui/icons-material/Headphones';
 import ClearIcon from '@mui/icons-material/Clear';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import type { ProjectAudio } from '../types';
+import { invalidateAudioAnalysis } from '../engine/audioAnalyzer';
 
 interface Props {
   audio: ProjectAudio;
@@ -111,7 +112,12 @@ export function AudioPanel({ audio, onChange, onRestart, role = 'main' }: Props)
           <Button
             color="error"
             variant="outlined"
-            onClick={() =>
+            onClick={() => {
+              // Free the analyzer's cached PCM/peaks for this src so it
+              // doesn't sit in memory for the rest of the session.
+              if (audio.src) {
+                try { invalidateAudioAnalysis(audio.src); } catch { /* ignore */ }
+              }
               onChange({
                 ...audio,
                 src: null,
@@ -119,8 +125,8 @@ export function AudioPanel({ audio, onChange, onRestart, role = 'main' }: Props)
                 start: 0,
                 end: null,
                 duration: null
-              })
-            }
+              });
+            }}
             startIcon={<ClearIcon />}
           >
             Remove

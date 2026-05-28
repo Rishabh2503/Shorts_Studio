@@ -158,7 +158,11 @@ function sanitizeForStorage(state: ProjectState): ProjectState {
     clips: state.clips.map((c) => ({
       ...c,
       src: c.src?.startsWith('blob:') ? '' : c.src,
-      splitSrc: c.splitSrc?.startsWith('blob:') ? '' : c.splitSrc
+      splitSrc: c.splitSrc?.startsWith('blob:') ? '' : c.splitSrc,
+      // Video blob URLs die on reload too; drop them so the restored clip
+      // falls back to its still poster (`src`) rather than pointing at a
+      // dead Blob handle.
+      videoSrc: c.videoSrc?.startsWith('blob:') ? undefined : c.videoSrc
     })),
     audio: {
       ...state.audio,

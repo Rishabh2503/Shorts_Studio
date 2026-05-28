@@ -72,11 +72,19 @@ export function DropZone({ onImage, onVideo, onAudio }: Props) {
             if (!onVideo) continue;
             setVideoStatus({ name: f.name, pct: 20, stage: 'Reading file…' });
             const videoSrc = URL.createObjectURL(f);
-            setVideoStatus({ name: f.name, pct: 60, stage: 'Capturing thumbnail…' });
-            const { poster, duration } = await extractVideoPoster(f, {
-              maxDimension: 1080
-            });
-            onVideo({ videoSrc, poster, duration, name: f.name });
+            try {
+              setVideoStatus({ name: f.name, pct: 60, stage: 'Capturing thumbnail…' });
+              const { poster, duration } = await extractVideoPoster(f, {
+                maxDimension: 1080
+              });
+              onVideo({ videoSrc, poster, duration, name: f.name });
+            } catch (err) {
+              // Poster extraction failed — revoke the blob URL we just
+              // minted, otherwise the underlying File blob leaks for the
+              // life of the tab.
+              try { URL.revokeObjectURL(videoSrc); } catch { /* ignore */ }
+              throw err;
+            }
           } else if (f.type.startsWith('image/')) {
             const url = await fileToDataUrl(f);
             onImage(url, f.name);

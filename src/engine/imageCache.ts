@@ -51,4 +51,6 @@ export function pruneCache(activeSources: Iterable<string>): void {
   const keep = new Set(activeSources);
   for (const k of cache.keys()) if (!keep.has(k)) cache.delete(k);
   for (const k of failed) if (!keep.has(k)) failed.delete(k);
+  // Don't touch `inflight` \u2014 in-progress loads will resolve into `cache`
+  // on their own and would be incorrectly cancelled here if dropped early.
 }

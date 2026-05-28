@@ -183,7 +183,11 @@ function AppInner() {
       clips: project.clips.map((c) => ({
         ...c,
         src: c.src?.startsWith('blob:') ? '' : c.src,
-        splitSrc: c.splitSrc?.startsWith('blob:') ? '' : c.splitSrc
+        splitSrc: c.splitSrc?.startsWith('blob:') ? '' : c.splitSrc,
+        // blob: video URLs don't survive reload either — drop them so the
+        // restored clip falls back to its still poster (`src`) instead of
+        // pointing at a dead Blob handle.
+        videoSrc: c.videoSrc?.startsWith('blob:') ? undefined : c.videoSrc
       })),
       audio: {
         ...project.audio,
@@ -308,12 +312,16 @@ function AppInner() {
   // from the render loop so it doesn't cause re-renders. Honours the audio
   // trim window: preview starts at audio.start and (in fitAudio mode) stops
   // at audio.end so the user only hears the chosen slice.
+  //
+  // NOTE: volume is intentionally NOT a dep of this effect. Tying volume to
+  // the seek+play effect made the audio playhead snap to `start` every time
+  // the user dragged the volume slider during playback. Volume is applied in
+  // its own tiny effect below so it can be tweaked live without re-seeking.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     if (playing && dur > 0) {
       lastTickRef.current = 0; // reset dt accumulator so first frame after play has dt=0
-      a.volume = project.audio.volume;
       // Translate playhead into audio-file time, accounting for trim start.
       const audioT = project.audio.start + Math.min(time, audioRangeDur || dur);
       try { a.currentTime = audioT; } catch { /* ignore seek errors */ }
@@ -324,10 +332,17 @@ function AppInner() {
       a.pause();
     }
     // We *don't* depend on `time` here — we don't want to re-seek every frame,
-    // only on play / pause / sync-mode changes. Manual scrub uses a separate
-    // effect below.
+    // only on play / pause / sync-mode changes. Manual scrub uses `seekTo`
+    // which seeks the audio element directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, dur, project.audio.volume, project.audio.src, project.audio.start, project.audio.syncMode]);
+  }, [playing, dur, project.audio.src, project.audio.start, project.audio.syncMode]);
+
+  // Live volume application — independent of play/seek so dragging the slider
+  // never re-seeks the playhead.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (a) a.volume = project.audio.volume;
+  }, [project.audio.volume]);
 
   // Mirror the same play/pause + seek logic for the optional background track.
   // Background audio always uses its own loop flag (so a short royalty-free
@@ -337,16 +352,24 @@ function AppInner() {
     const a = audio2Ref.current;
     if (!a) return;
     if (playing && dur > 0 && project.audio2.src) {
-      a.volume = project.audio2.volume;
       const audioT = project.audio2.start + Math.min(time, dur);
       try { a.currentTime = audioT; } catch { /* ignore */ }
-      a.loop = project.audio2.syncMode === 'loop';
+      // We intentionally do NOT set the native HTMLAudioElement `loop` flag —
+      // it would loop the WHOLE file, ignoring the user's trim window. The
+      // trim+wrap handler below manages looping within [start..end] manually.
+      a.loop = false;
       a.play().catch(() => { /* autoplay may be blocked */ });
     } else {
       a.pause();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, dur, project.audio2.volume, project.audio2.src, project.audio2.start, project.audio2.syncMode]);
+  }, [playing, dur, project.audio2.src, project.audio2.start, project.audio2.syncMode]);
+
+  // Live volume for the background track.
+  useEffect(() => {
+    const a = audio2Ref.current;
+    if (a) a.volume = project.audio2.volume;
+  }, [project.audio2.volume]);
 
   // Hard-stop the audio when its trim end is reached (fitAudio / fitVideo).
   // Without this, the <audio loop> attribute would replay past audio.end.
@@ -369,6 +392,34 @@ function AppInner() {
     return () => a.removeEventListener('timeupdate', onTime);
   }, [project.audio.end, project.audio.duration, project.audio.start, project.audio.syncMode]);
 
+  // Trim-window enforcement for the background track. The native <audio loop>
+  // attribute would loop the *entire* file, ignoring the trim — so we do it
+  // manually here for both `loop` (wrap to trim start) and `fitAudio`
+  // (one-shot, pause at trim end).
+  useEffect(() => {
+    const a = audio2Ref.current;
+    if (!a) return;
+    const onTime = () => {
+      const end =
+        project.audio2.end ?? project.audio2.duration ?? Infinity;
+      if (a.currentTime >= end - 0.02) {
+        if (project.audio2.syncMode === 'loop') {
+          a.currentTime = project.audio2.start;
+        } else {
+          a.pause();
+          a.currentTime = project.audio2.start;
+        }
+      }
+    };
+    a.addEventListener('timeupdate', onTime);
+    return () => a.removeEventListener('timeupdate', onTime);
+  }, [
+    project.audio2.end,
+    project.audio2.duration,
+    project.audio2.start,
+    project.audio2.syncMode
+  ]);
+
   // Auto-stop and clamp when the project becomes empty.
   useEffect(() => {
     if (dur <= 0) {
@@ -383,11 +434,14 @@ function AppInner() {
   }, [dur]);
 
   const addImage = useCallback(
-    (src: string, prompt?: string) => {
+    (src: string, prompt?: string, durationSec?: number) => {
       const clip: ImageClip = {
         id: uuid(),
         src,
-        duration: 3,
+        // Story-scene flow passes an explicit per-clip duration so all N
+        // clips evenly split the audio length (or a user-chosen total).
+        // Falls back to the standard 3s clip if not provided.
+        duration: Math.max(0.1, Math.min(30, durationSec ?? 3)),
         // Default to AI-picked effect so each clip gets motion that fits its
         // prompt — and varies across clips because of the unique effectSeed.
         effect: 'auto',
@@ -513,8 +567,17 @@ function AppInner() {
   }, [project.audio.src]);
 
   // Drop the cache for sources that are no longer in use to keep memory bounded.
+  // We MUST include every src actually referenced by an active clip — main
+  // src, the split-screen second image, AND the video-clip poster (already
+  // covered by `src`). Forgetting `splitSrc` caused split images to be
+  // evicted every render and reloaded on the next frame (visible flicker).
   useEffect(() => {
-    pruneCache(project.clips.map((c) => c.src));
+    const active: string[] = [];
+    for (const c of project.clips) {
+      if (c.src) active.push(c.src);
+      if (c.splitSrc) active.push(c.splitSrc);
+    }
+    pruneCache(active);
   }, [project.clips]);
 
   // Listen for global runtime errors so we can surface a toast instead of crashing silently.
@@ -752,7 +815,15 @@ function AppInner() {
   ]);
 
   function removeClip(id: string) {
-    setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== id) }));
+    setProject((p) => {
+      const victim = p.clips.find((c) => c.id === id);
+      // Revoke the blob: URL we minted for an uploaded video — otherwise the
+      // underlying File blob lingers in memory for the life of the tab.
+      if (victim?.videoSrc?.startsWith('blob:')) {
+        try { URL.revokeObjectURL(victim.videoSrc); } catch { /* ignore */ }
+      }
+      return { ...p, clips: p.clips.filter((c) => c.id !== id) };
+    });
     if (selectedId === id) setSelectedId(null);
   }
 
@@ -804,6 +875,9 @@ function AppInner() {
   }
 
   // Jump playhead to the start of the selected clip when selection changes by user click.
+  // `project.clips` is a dep so the accumulated offset reflects the current
+  // ordering — without it, reordering then re-selecting the same clip would
+  // compute a stale offset.
   useEffect(() => {
     if (!selectedId) return;
     let acc = 0;
@@ -814,8 +888,7 @@ function AppInner() {
       }
       acc += c.duration;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId]);
+  }, [selectedId, project.clips]);
 
   const onLoadError = useCallback(
     (n: number) => {
@@ -1057,7 +1130,11 @@ function AppInner() {
             }}
           >
             <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
-              <MediaPanel onAddImage={addImage} onAddVideo={addVideoClip} />
+              <MediaPanel
+                onAddImage={addImage}
+                onAddVideo={addVideoClip}
+                audioDurationSec={audioRangeDur > 0 ? audioRangeDur : undefined}
+              />
             </Paper>
             <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
               <AudioPanel

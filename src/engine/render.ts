@@ -729,8 +729,11 @@ function drawCover(
     ctx.drawImage(img, dx + o, dy, dw, dh);
     ctx.restore();
   } else if (t.vhsRoll !== 0) {
-    // Split into two horizontal bands and offset them.
-    const half = H / 2;
+    // Split into two horizontal bands and offset them. Both destination
+    // bands MUST be positioned in `dh` space (the scaled image rect),
+    // NOT in canvas-half (`H/2`) space — otherwise when the image is
+    // scaled to cover and `dh > H`, the second band lands at a y where
+    // it overlaps or gaps with the first.
     ctx.drawImage(img, 0, 0, iw, ih / 2, dx, dy + t.vhsRoll, dw, dh / 2);
     ctx.drawImage(
       img,
@@ -739,7 +742,7 @@ function drawCover(
       iw,
       ih / 2,
       dx,
-      dy + half - t.vhsRoll,
+      dy + dh / 2 - t.vhsRoll,
       dw,
       dh / 2
     );
