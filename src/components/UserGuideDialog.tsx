@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import {
   Box,
   Button,
@@ -31,6 +32,18 @@ import SwapVertRoundedIcon from '@mui/icons-material/SwapVertRounded';
 
 const WALKTHROUGH_VIDEO_URL =
   import.meta.env.VITE_WALKTHROUGH_VIDEO_URL?.trim() || '/walkthrough.mp4';
+const WALKTHROUGH_POSTER_URL =
+  import.meta.env.VITE_WALKTHROUGH_POSTER_URL?.trim() || '/walkthrough-poster.jpg';
+
+const WALKTHROUGH_CHAPTERS: Array<{ label: string; atSec: number }> = [
+  { label: 'Intro', atSec: 0 },
+  { label: 'Generate visuals', atSec: 15 },
+  { label: 'Upload media', atSec: 40 },
+  { label: 'Audio sync', atSec: 60 },
+  { label: 'Captions', atSec: 85 },
+  { label: 'Timeline polish', atSec: 110 },
+  { label: 'Export', atSec: 130 }
+];
 
 /**
  * Information architecture for the user-guide page.
@@ -246,6 +259,17 @@ interface UserGuideProps {
 }
 
 export function UserGuideDialog({ open, onClose }: UserGuideProps) {
+  const walkthroughVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  function jumpToChapter(atSec: number): void {
+    const el = walkthroughVideoRef.current;
+    if (!el) return;
+    el.currentTime = atSec;
+    void el.play().catch(() => {
+      // Ignore autoplay restrictions; user can press play manually.
+    });
+  }
+
   return (
     <Dialog
       open={open}
@@ -365,15 +389,31 @@ export function UserGuideDialog({ open, onClose }: UserGuideProps) {
             >
               <Box
                 component="video"
+                ref={walkthroughVideoRef}
                 controls
                 preload="metadata"
                 src={WALKTHROUGH_VIDEO_URL}
+                poster={WALKTHROUGH_POSTER_URL}
                 sx={{ width: '100%', display: 'block', aspectRatio: '16 / 9' }}
               />
             </Box>
 
+            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.25 }}>
+              {WALKTHROUGH_CHAPTERS.map((chapter) => (
+                <Chip
+                  key={chapter.label}
+                  label={`${chapter.label} (${Math.floor(chapter.atSec / 60)}:${String(chapter.atSec % 60).padStart(2, '0')})`}
+                  size="small"
+                  variant="outlined"
+                  clickable
+                  onClick={() => jumpToChapter(chapter.atSec)}
+                  sx={{ borderColor: 'rgba(34,211,238,0.4)' }}
+                />
+              ))}
+            </Stack>
+
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              Tip: place your recording at public/walkthrough.mp4 or set VITE_WALKTHROUGH_VIDEO_URL.
+              Tip: place media at public/walkthrough.mp4 and public/walkthrough-poster.jpg, or set VITE_WALKTHROUGH_VIDEO_URL and VITE_WALKTHROUGH_POSTER_URL.
             </Typography>
           </Box>
 

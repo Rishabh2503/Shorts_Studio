@@ -5,6 +5,7 @@ interface ImportMetaEnv {
   readonly VITE_LOCAL_ADMIN_KEY?: string;
   readonly VITE_USE_VERCEL_API?: string;
   readonly VITE_WALKTHROUGH_VIDEO_URL?: string;
+  readonly VITE_WALKTHROUGH_POSTER_URL?: string;
 }
 
 interface ImportMeta {
