@@ -1,0 +1,22 @@
+<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0f172a"/>
+      <stop offset="0.6" stop-color="#1e1b4b"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <linearGradient id="pill" x1="0" y1="0" x2="260" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <rect x="80" y="92" width="1120" height="536" rx="20" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.16)"/>
+  <circle cx="640" cy="360" r="84" fill="rgba(255,255,255,0.18)"/>
+  <path d="M616 318L698 360L616 402V318Z" fill="white"/>
+  <rect x="96" y="108" width="260" height="56" rx="28" fill="url(#pill)"/>
+  <text x="226" y="144" text-anchor="middle" fill="white" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Walkthrough</text>
+  <text x="640" y="610" text-anchor="middle" fill="rgba(255,255,255,0.86)" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="600">
+    Shorts Studio: From Prompt to Export
+  </text>
+</svg>

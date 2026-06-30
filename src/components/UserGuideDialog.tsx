@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -33,7 +33,7 @@ import SwapVertRoundedIcon from '@mui/icons-material/SwapVertRounded';
 const WALKTHROUGH_VIDEO_URL =
   import.meta.env.VITE_WALKTHROUGH_VIDEO_URL?.trim() || '/walkthrough.mp4';
 const WALKTHROUGH_POSTER_URL =
-  import.meta.env.VITE_WALKTHROUGH_POSTER_URL?.trim() || '/walkthrough-poster.jpg';
+  import.meta.env.VITE_WALKTHROUGH_POSTER_URL?.trim() || '/walkthrough-poster.svg';
 
 const WALKTHROUGH_CHAPTERS: Array<{ label: string; atSec: number }> = [
   { label: 'Intro', atSec: 0 },
@@ -43,6 +43,14 @@ const WALKTHROUGH_CHAPTERS: Array<{ label: string; atSec: number }> = [
   { label: 'Captions', atSec: 85 },
   { label: 'Timeline polish', atSec: 110 },
   { label: 'Export', atSec: 130 }
+];
+
+const WALKTHROUGH_VISUAL_STEPS: Array<{ title: string; detail: string }> = [
+  { title: '1. Generate visuals', detail: 'Use AI prompt or upload your own media.' },
+  { title: '2. Add audio', detail: 'Drop voiceover and optional background music.' },
+  { title: '3. Auto captions', detail: 'Transcribe and style captions in one pass.' },
+  { title: '4. Polish timeline', detail: 'Reorder clips, tweak durations, add split-screen.' },
+  { title: '5. Render & download', detail: 'Export WebM with real-time sync.' }
 ];
 
 /**
@@ -260,6 +268,7 @@ interface UserGuideProps {
 
 export function UserGuideDialog({ open, onClose }: UserGuideProps) {
   const walkthroughVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [walkthroughUnavailable, setWalkthroughUnavailable] = useState(false);
 
   function jumpToChapter(atSec: number): void {
     const el = walkthroughVideoRef.current;
@@ -394,9 +403,12 @@ export function UserGuideDialog({ open, onClose }: UserGuideProps) {
                 preload="metadata"
                 src={WALKTHROUGH_VIDEO_URL}
                 poster={WALKTHROUGH_POSTER_URL}
+                onError={() => setWalkthroughUnavailable(true)}
                 sx={{ width: '100%', display: 'block', aspectRatio: '16 / 9' }}
               />
             </Box>
+
+
 
             <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.25 }}>
               {WALKTHROUGH_CHAPTERS.map((chapter) => (
@@ -413,8 +425,37 @@ export function UserGuideDialog({ open, onClose }: UserGuideProps) {
             </Stack>
 
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              Tip: place media at public/walkthrough.mp4 and public/walkthrough-poster.jpg, or set VITE_WALKTHROUGH_VIDEO_URL and VITE_WALKTHROUGH_POSTER_URL.
+              Tip: place media at public/walkthrough.mp4 and public/walkthrough-poster.svg, or set VITE_WALKTHROUGH_VIDEO_URL and VITE_WALKTHROUGH_POSTER_URL.
             </Typography>
+
+            <Box sx={{ mt: 1.75 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                Visual walkthrough
+              </Typography>
+              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                {WALKTHROUGH_VISUAL_STEPS.map((step) => (
+                  <Box
+                    key={step.title}
+                    sx={{
+                      flex: { xs: '1 1 100%', sm: '1 1 calc(50% - 8px)', md: '1 1 calc(33.33% - 8px)' },
+                      minWidth: 180,
+                      p: 1.25,
+                      borderRadius: 1.5,
+                      border: '1px solid rgba(34,211,238,0.2)',
+                      background:
+                        'linear-gradient(160deg, rgba(34,211,238,0.08) 0%, rgba(124,58,237,0.08) 100%)'
+                    }}
+                  >
+                    <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.3 }}>
+                      {step.title}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                      {step.detail}
+                    </Typography>
+                  </Box>
+                ))}
+              </Stack>
+            </Box>
           </Box>
 
           {/* Section quick-jump chips. Anchors scroll inside the dialog. */}
