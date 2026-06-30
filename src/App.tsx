@@ -25,6 +25,8 @@ import AspectRatioIcon from '@mui/icons-material/AspectRatio';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import FolderOpenRoundedIcon from '@mui/icons-material/FolderOpenRounded';
+import BugReportRoundedIcon from '@mui/icons-material/BugReportRounded';
+import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import { v4 as uuid } from 'uuid';
 import {
   ASPECT_RATIOS,
@@ -72,10 +74,27 @@ const ProjectLibraryDialog = lazy(() =>
     default: m.ProjectLibraryDialog
   }))
 );
+const BugReportDialog = lazy(() =>
+  import('./components/BugReportDialog').then((m) => ({
+    default: m.BugReportDialog
+  }))
+);
+const AdminDashboardDialog = lazy(() =>
+  import('./components/AdminDashboardDialog').then((m) => ({
+    default: m.AdminDashboardDialog
+  }))
+);
 import { ExportButton } from './components/ExportButton';
 import { DropZone } from './components/DropZone';
 import { ToastProvider, useToast } from './components/Toast';
 import { NotificationsMenu } from './components/NotificationsMenu';
+import { trackActivity } from './lib/activity';
+import {
+  canUseLocalAdminMode,
+  hasLocalAdminSession,
+  setLocalAdminSession,
+  validateLocalAdminCredentials
+} from './lib/adminLocal';
 // UserGuideDialog is lazy-loaded above.
 import { pruneCache } from './engine/imageCache';
 
@@ -132,12 +151,77 @@ function AppInner() {
   const [ratioMenuAnchor, setRatioMenuAnchor] = useState<HTMLElement | null>(null);
   /** Controls visibility of the full-page user guide dialog. */
   const [guideOpen, setGuideOpen] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [canSeeAdmin, setCanSeeAdmin] = useState(false);
   /**
    * Controls visibility of the project library dialog. The dialog manages
    * its own list state (loaded from IDB on open), so we only track the
    * open/close flag here.
    */
   const [libraryOpen, setLibraryOpen] = useState(false);
+
+  useEffect(() => {
+    trackActivity({ type: 'user_action', meta: { action: 'app_loaded' } });
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const url = new URL(window.location.href);
+        const unlockKey = url.searchParams.get('admin_key');
+        const unlockEmail =
+          url.searchParams.get('admin_email') ??
+          (import.meta.env.VITE_ADMIN_EMAIL ?? 'gupta.rish2501@gmail.com');
+
+        if (unlockKey) {
+          let unlocked = false;
+          if (canUseLocalAdminMode()) {
+            unlocked = validateLocalAdminCredentials(unlockEmail, unlockKey);
+            if (unlocked) {
+              setLocalAdminSession(true);
+            }
+          } else {
+            const login = await fetch('/api/admin/session', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: unlockEmail, key: unlockKey })
+            });
+            unlocked = login.ok;
+          }
+
+          if (alive && unlocked) {
+            setCanSeeAdmin(true);
+            toast.show('Admin mode unlocked for this browser session.', 'success');
+          } else if (alive) {
+            toast.show('Admin unlock failed. Check email/key.', 'error');
+          }
+
+          url.searchParams.delete('admin_key');
+          url.searchParams.delete('admin_email');
+          window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+        }
+
+        if (canUseLocalAdminMode()) {
+          if (!alive) return;
+          setCanSeeAdmin(hasLocalAdminSession());
+          return;
+        }
+
+        const session = await fetch('/api/admin/session', { cache: 'no-store' });
+        if (!alive || !session.ok) return;
+        const data = (await session.json()) as { authenticated?: boolean };
+        setCanSeeAdmin(!!data.authenticated);
+      } catch {
+        // Admin visibility fallback: hidden
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [toast]);
 
   // ---- Autosave / restore ---------------------------------------------------
   //
@@ -708,6 +792,7 @@ function AppInner() {
     project.audio.src,
     project.audio.start,
     project.audio.end,
+    project.audio.duration,
     project.script.sttModel,
     project.script.sttLanguage,
     toast
@@ -966,7 +1051,7 @@ function AppInner() {
   );
 
   return (
-    <Box className="aurora" sx={{ minHeight: '100vh' }}>
+    <Box className="aurora" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <DropZone
         onImage={(url) => addImage(url)}
         onVideo={addVideoClip}
@@ -980,56 +1065,132 @@ function AppInner() {
         <audio ref={audio2Ref} src={project.audio2.src} preload="auto" />
       )}
 
-      <Container maxWidth="xl" sx={{ py: { xs: 2, sm: 3 }, px: { xs: 1.5, sm: 3 } }}>
-        <Stack
-          direction={{ xs: 'column', md: 'row' }}
-          alignItems={{ xs: 'flex-start', md: 'center' }}
-          justifyContent="space-between"
-          spacing={2}
-          mb={{ xs: 2, sm: 3 }}
-        >
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={1.5}
-            sx={{ width: { xs: '100%', md: 'auto' } }}
+      {/* ── Sticky Top Nav Bar ─────────────────────────────────────── */}
+      <Box
+        className="topnav"
+        sx={{
+          px: { xs: 2, sm: 3, md: 4 },
+          py: 1.25,
+          display: 'grid',
+          gridTemplateColumns: '1fr auto 1fr',
+          alignItems: 'center',
+          gap: 2,
+          minHeight: 56
+        }}
+      >
+        {/* Brand mark */}
+        <Stack direction="row" alignItems="center" spacing={1.5} sx={{ justifySelf: 'start', minWidth: 0 }}>
+          <Box
+            sx={{
+              width: 32,
+              height: 32,
+              borderRadius: '9px',
+              background: 'linear-gradient(135deg,#6366f1 0%,#22d3ee 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 18px rgba(99,102,241,0.4)',
+              flexShrink: 0
+            }}
           >
-            <Box
+            <AutoAwesomeIcon sx={{ color: '#fff', fontSize: 16 }} />
+          </Box>
+          <Stack spacing={0}>
+            <Typography
               sx={{
-                width: 44,
-                height: 44,
-                borderRadius: 2,
-                background:
-                  'linear-gradient(135deg,#7c3aed 0%,#22d3ee 60%,#ff3ea5 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 8px 24px rgba(124,58,237,0.35)'
+                fontWeight: 700,
+                fontSize: '0.9375rem',
+                letterSpacing: '-0.02em',
+                lineHeight: 1.1,
+                color: 'text.primary'
               }}
             >
-              <AutoAwesomeIcon sx={{ color: '#fff' }} />
-            </Box>
-            <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography variant="h4" sx={{ lineHeight: 1, fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>
-                Shorts Studio
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                AI-powered YouTube Shorts maker • runs entirely in your browser
-              </Typography>
-            </Box>
+              Shorts Studio
+            </Typography>
+            <Typography
+              sx={{
+                fontSize: '0.625rem',
+                letterSpacing: '0.06em',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                color: 'text.secondary',
+                lineHeight: 1
+              }}
+            >
+              AI Video Maker
+            </Typography>
+          </Stack>
+          <Box
+            sx={{
+              display: { xs: 'none', sm: 'block' },
+              px: 1,
+              py: 0.25,
+              borderRadius: '5px',
+              background: 'rgba(99,102,241,0.12)',
+                border: '1px solid rgba(91,138,245,0.28)',
+              fontSize: '0.6rem',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+                color: '#7ea5ff',
+              textTransform: 'uppercase'
+            }}
+          >
+            Beta
+          </Box>
+        </Stack>
+
+        {/* Center: Format controls — hidden on mobile */}
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{ display: { xs: 'none', md: 'flex' }, justifySelf: 'center' }}
+        >
+          {formatControls}
+        </Stack>
+
+        {/* Right: utility actions */}
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ justifySelf: 'end' }}>
             {/*
-              Always-visible utility icons. They sit inside the title row
-              (not the format-controls stack) so they remain reachable on
-              mobile, where the format stack is hidden. flex:1 on the title
-              Box pushes these to the far right of the row.
             */}
-            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
-              <NotificationsMenu />
-              <Tooltip
-                title="Project library \u2014 save multiple drafts and switch between them"
-                placement="bottom"
-                arrow
-              >
+            <NotificationsMenu />
+              <Tooltip title="Report a bug">
+                <IconButton
+                  size="small"
+                  onClick={() => {
+                    setBugReportOpen(true);
+                    trackActivity({ type: 'user_action', meta: { action: 'open_bug_report' } });
+                  }}
+                  aria-label="Report a bug"
+                  aria-haspopup="dialog"
+                  sx={{
+                    color: 'text.secondary',
+                    '&:hover': { color: '#f59e0b', background: 'rgba(245,158,11,0.12)' }
+                  }}
+                >
+                  <BugReportRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              {canSeeAdmin && (
+                <Tooltip title="Admin dashboard">
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      setAdminOpen(true);
+                      trackActivity({ type: 'user_action', meta: { action: 'open_admin' } });
+                    }}
+                    aria-label="Open admin dashboard"
+                    aria-haspopup="dialog"
+                    sx={{
+                      color: 'text.secondary',
+                      '&:hover': { color: '#10b981', background: 'rgba(16,185,129,0.12)' }
+                    }}
+                  >
+                    <AdminPanelSettingsRoundedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+              <Tooltip title="Project library — save multiple drafts">
                 <IconButton
                   size="small"
                   onClick={() => setLibraryOpen(true)}
@@ -1037,17 +1198,13 @@ function AppInner() {
                   aria-haspopup="dialog"
                   sx={{
                     color: 'text.secondary',
-                    transition: 'color 160ms ease',
-                    '&:hover': {
-                      color: '#a78bfa',
-                      background: 'rgba(167,139,250,0.10)'
-                    }
+                    '&:hover': { color: '#7ea5ff', background: 'rgba(91,138,245,0.12)' }
                   }}
                 >
                   <FolderOpenRoundedIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title="User guide \u2014 how to use Shorts Studio" placement="bottom" arrow>
+              <Tooltip title="User guide — how to use Shorts Studio">
                 <IconButton
                   size="small"
                   onClick={() => setGuideOpen(true)}
@@ -1055,65 +1212,45 @@ function AppInner() {
                   aria-haspopup="dialog"
                   sx={{
                     color: 'text.secondary',
-                    transition: 'color 160ms ease',
-                    '&:hover': {
-                      color: '#22d3ee',
-                      background: 'rgba(34,211,238,0.10)'
-                    }
+                    '&:hover': { color: '#22d3ee', background: 'rgba(34,211,238,0.09)' }
                   }}
                 >
                   <HelpOutlineRoundedIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-            </Stack>
-          </Stack>
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={{ xs: 1, sm: 1.5 }}
-            flexWrap="wrap"
-            useFlexGap
-            sx={{
-              width: { xs: '100%', md: 'auto' },
-              // Hidden on phones / small tablets \u2014 the same controls
-              // appear as a dedicated bar above the preview on mobile to
-              // keep the header readable and avoid overlapping buttons.
-              display: { xs: 'none', md: 'flex' }
+        </Stack>
+      </Box>
+      {/* ── / Top Nav Bar ─────────────────────────────────────────────── */}
+
+      {/* Aspect-ratio menu — popover anchor lives here to work on all screen sizes */}
+      <Menu
+        anchorEl={ratioMenuAnchor}
+        open={!!ratioMenuAnchor}
+        onClose={() => setRatioMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+      >
+        {(Object.keys(ASPECT_RATIOS) as AspectRatioId[]).map((id) => (
+          <MenuItem
+            key={id}
+            selected={id === project.aspectRatio}
+            onClick={() => {
+              const dims = getCanvasDims(id);
+              setProject((p) => ({
+                ...p,
+                aspectRatio: id,
+                width: dims.width,
+                height: dims.height
+              }));
+              setRatioMenuAnchor(null);
             }}
           >
-            {formatControls}
-          </Stack>
-          {/*
-            Mobile-only aspect-ratio menu (rendered outside the hidden
-            stack so the popover anchor still mounts on phones).
-          */}
-          <Menu
-            anchorEl={ratioMenuAnchor}
-            open={!!ratioMenuAnchor}
-            onClose={() => setRatioMenuAnchor(null)}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-            transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-          >
-            {(Object.keys(ASPECT_RATIOS) as AspectRatioId[]).map((id) => (
-              <MenuItem
-                key={id}
-                selected={id === project.aspectRatio}
-                onClick={() => {
-                  const dims = getCanvasDims(id);
-                  setProject((p) => ({
-                    ...p,
-                    aspectRatio: id,
-                    width: dims.width,
-                    height: dims.height
-                  }));
-                  setRatioMenuAnchor(null);
-                }}
-              >
-                {ASPECT_RATIOS[id].label}
-              </MenuItem>
-            ))}
-          </Menu>
-        </Stack>
+            {ASPECT_RATIOS[id].label}
+          </MenuItem>
+        ))}
+      </Menu>
+
+      <Container maxWidth="xl" sx={{ py: { xs: 2, sm: 2.5 }, px: { xs: 1.5, sm: 3 }, flex: 1 }}>
 
         <Stack
           direction={{ xs: 'column', lg: 'row' }}
@@ -1129,27 +1266,38 @@ function AppInner() {
               minWidth: 0
             }}
           >
-            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
+            {/* ── Media panel */}
+            <Paper sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: '12px' }}>
+              <Box className="section-label">
+                <Box sx={{ width: 4, height: 14, borderRadius: '2px', background: 'linear-gradient(180deg,#6366f1,#22d3ee)', flexShrink: 0 }} />
+                <Typography className="section-label-text">Media &amp; AI Generate</Typography>
+              </Box>
               <MediaPanel
                 onAddImage={addImage}
                 onAddVideo={addVideoClip}
                 audioDurationSec={audioRangeDur > 0 ? audioRangeDur : undefined}
               />
             </Paper>
-            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
+
+            {/* ── Main audio */}
+            <Paper sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: '12px' }}>
+              <Box className="section-label">
+                <Box sx={{ width: 4, height: 14, borderRadius: '2px', background: 'linear-gradient(180deg,#22d3ee,#6366f1)', flexShrink: 0 }} />
+                <Typography className="section-label-text">Voiceover / Audio</Typography>
+              </Box>
               <AudioPanel
                 audio={project.audio}
                 onChange={(audio) => setProject((p) => ({ ...p, audio }))}
                 onRestart={() => seekTo(0)}
               />
             </Paper>
-            {/*
-              Second (background) audio track. Plays in parallel with the main
-              voiceover so creators can layer a royalty-free music bed and
-              eliminate copyright strikes — the transcript still comes only
-              from the main track.
-            */}
-            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
+
+            {/* ── Background music track */}
+            <Paper sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: '12px' }}>
+              <Box className="section-label">
+                <Box sx={{ width: 4, height: 14, borderRadius: '2px', background: 'linear-gradient(180deg,#10b981,#22d3ee)', flexShrink: 0 }} />
+                <Typography className="section-label-text">Background Music</Typography>
+              </Box>
               <AudioPanel
                 audio={project.audio2}
                 onChange={(audio2) => setProject((p) => ({ ...p, audio2 }))}
@@ -1159,13 +1307,14 @@ function AppInner() {
           </Stack>
 
           {/* Center: Preview */}
-          <Stack spacing={2} sx={{ flex: '1 1 auto', minWidth: 0 }}>
+          <Stack useFlexGap spacing={2} sx={{ flex: '1 1 auto', minWidth: 0 }}>
             {/*
               Mobile-only format bar. The aspect-ratio pill + captions toggle
               live here on phones/small tablets because the header runs out
               of horizontal room \u2014 putting them right above the preview
               keeps the controls next to what they affect.
             */}
+            {/* Mobile-only format bar */}
             <Paper
               sx={{
                 display: { xs: 'flex', md: 'none' },
@@ -1175,7 +1324,8 @@ function AppInner() {
                 justifyContent: 'space-between',
                 gap: 1,
                 flexWrap: 'wrap',
-                borderRadius: 2
+                borderRadius: '10px',
+                background: 'rgba(30,32,40,0.97)'
               }}
             >
               {formatControls}
@@ -1218,24 +1368,30 @@ function AppInner() {
               <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
                 <IconButton
                   onClick={() => {
-                    // If we paused at the end, pressing Play replays from 0.
-                    if (!playing && time >= dur - 0.01 && dur > 0) {
-                      seekTo(0);
-                    }
+                    if (!playing && time >= dur - 0.01 && dur > 0) seekTo(0);
                     setPlaying((p) => !p);
                   }}
                   disabled={dur <= 0}
                   size="large"
                   sx={{
-                    background:
-                      'linear-gradient(135deg,#7c3aed 0%,#22d3ee 100%)',
+                    background: 'linear-gradient(135deg,#6366f1 0%,#22d3ee 100%)',
                     color: '#fff',
-                    '&:hover': { opacity: 0.9 }
+                      boxShadow: '0 2px 14px rgba(91,138,245,0.4)',
+                    '&:hover': {
+                        background: 'linear-gradient(135deg,#7ea5ff 0%,#67e8f9 100%)',
+                        boxShadow: '0 4px 22px rgba(91,138,245,0.55)',
+                      transform: 'scale(1.06)'
+                    },
+                    transition: 'all 160ms ease'
                   }}
                 >
                   {playing ? <PauseRoundedIcon /> : <PlayArrowRoundedIcon />}
                 </IconButton>
-                <IconButton onClick={() => seekTo(0)} disabled={dur <= 0}>
+                <IconButton
+                  onClick={() => seekTo(0)}
+                  disabled={dur <= 0}
+                  sx={{ color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
+                >
                   <RestartAltIcon />
                 </IconButton>
                 <Tooltip
@@ -1297,7 +1453,12 @@ function AppInner() {
               </Box>
             </Paper>
 
-            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
+            {/* ── Timeline */}
+            <Paper sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: '12px' }}>
+              <Box className="section-label">
+                <Box sx={{ width: 4, height: 14, borderRadius: '2px', background: 'linear-gradient(180deg,#f59e0b,#f43f5e)', flexShrink: 0 }} />
+                <Typography className="section-label-text">Timeline</Typography>
+              </Box>
               <Timeline
                 clips={project.clips}
                 selectedId={selectedId}
@@ -1311,14 +1472,12 @@ function AppInner() {
               />
             </Paper>
 
-            {/*
-              Script / captions panel. Pulled out of the left sidebar so the
-              left column doesn't tower over the (often portrait) preview and
-              create dead space \u2014 keeping it in the main column also makes
-              the editing flow read top-to-bottom: preview \u2192 render \u2192
-              timeline \u2192 captions.
-            */}
-            <Paper sx={{ p: { xs: 1.5, sm: 2 } }}>
+            {/* ── Script & Captions */}
+            <Paper sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: '12px' }}>
+              <Box className="section-label">
+                <Box sx={{ width: 4, height: 14, borderRadius: '2px', background: 'linear-gradient(180deg,#a78bfa,#f43f5e)', flexShrink: 0 }} />
+                <Typography className="section-label-text">Script &amp; Captions</Typography>
+              </Box>
               <ScriptPanel
                 script={project.script}
                 onChange={(script) => setProject((p) => ({ ...p, script }))}
@@ -1337,10 +1496,18 @@ function AppInner() {
           </Stack>
         </Stack>
 
-        <Box mt={4} textAlign="center">
-          <Typography variant="caption" color="text.secondary">
-            Built with React + Vite + TypeScript + Tailwind + MUI • Renders {project.width}×{project.height} @ {project.fps}fps •
-            Output: WebM (VP9 + Opus). Drop into YouTube directly.
+        <Box mt={4} mb={2} textAlign="center">
+          <Typography
+            variant="caption"
+            sx={{
+              color: '#3a3a60',
+              fontSize: '0.65rem',
+              letterSpacing: '0.05em'
+            }}
+          >
+            Shorts Studio • React + Vite + TypeScript + MUI + Tailwind
+            • {project.width}×{project.height} @ {project.fps}fps
+            • WebM (VP9+Opus) • 100% in-browser, no server
           </Typography>
         </Box>
       </Container>
@@ -1375,6 +1542,25 @@ function AppInner() {
       {guideOpen && (
         <Suspense fallback={null}>
           <UserGuideDialog open={guideOpen} onClose={() => setGuideOpen(false)} />
+        </Suspense>
+      )}
+
+      {bugReportOpen && (
+        <Suspense fallback={null}>
+          <BugReportDialog
+            open={bugReportOpen}
+            onClose={() => setBugReportOpen(false)}
+            onNotify={(msg, level) => toast.show(msg, level)}
+          />
+        </Suspense>
+      )}
+
+      {adminOpen && (
+        <Suspense fallback={null}>
+          <AdminDashboardDialog
+            open={adminOpen}
+            onClose={() => setAdminOpen(false)}
+          />
         </Suspense>
       )}
 

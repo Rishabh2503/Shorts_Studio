@@ -194,7 +194,7 @@ async function getPipeline(
           message: `Trying ${a.label}\u2026`
         });
         try {
-          // eslint-disable-next-line no-console
+           
           console.info(`[speechToText] Attempt ${i + 1}/${attempts.length}: ${a.label} on ${MODEL_IDS[kind]}`);
           const pipe = await pipeline(
             'automatic-speech-recognition',
@@ -205,7 +205,7 @@ async function getPipeline(
               progress_callback: progressForward
             }
           );
-          // eslint-disable-next-line no-console
+           
           console.info(`[speechToText] \u2713 Loaded ${a.label}`);
           return pipe;
         } catch (err) {
@@ -222,7 +222,7 @@ async function getPipeline(
           // half-broken weight file from an earlier session.
           if (isPoisonedCache && !autoPurged) {
             autoPurged = true;
-            // eslint-disable-next-line no-console
+             
             console.warn(
               `[speechToText] Detected poisoned cache for ${MODEL_IDS[kind]}. Auto-purging Cache Storage + IndexedDB and retrying ${a.label}\u2026`
             );
@@ -267,7 +267,7 @@ async function getPipeline(
           }
 
           const isLast = i === attempts.length - 1;
-          // eslint-disable-next-line no-console
+           
           console.warn(
             `[speechToText] ${a.label} failed${isLast ? '' : ' \u2014 falling back'}. (${msg.slice(0, 200)})`
           );
@@ -409,7 +409,7 @@ export async function transcribeAudio(
       workingDuration = endSec - startSec;
     }
   }
-  // eslint-disable-next-line no-console
+   
   console.info(
     `[speechToText] Sending ${workingDuration.toFixed(2)}s (${workingSamples.length} samples @ 16 kHz, ` +
       `${(workingSamples.byteLength / 1048576).toFixed(2)} MB) to Whisper. ` +

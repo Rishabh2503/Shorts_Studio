@@ -58,6 +58,23 @@ async function loadVideoElement(src: string): Promise<HTMLVideoElement> {
   v.defaultMuted = true;
   v.playsInline = true;
   v.preload = 'auto';
+  // CRITICAL: Chromium (and Safari) throttle or completely freeze frame
+  // decoding on <video> elements that are not connected to the DOM. The
+  // element decodes the FIRST frame on `loadeddata` but subsequent
+  // `drawImage(video, ...)` calls keep painting that same frame even
+  // though `currentTime` advances — which the user sees as a frozen /
+  // "stuck" video clip in the exported file. Attaching the element to
+  // the document (hidden offscreen) keeps the decode pipeline alive.
+  v.style.position = 'fixed';
+  v.style.left = '-10000px';
+  v.style.top = '0';
+  v.style.width = '2px';
+  v.style.height = '2px';
+  v.style.opacity = '0';
+  v.style.pointerEvents = 'none';
+  v.setAttribute('aria-hidden', 'true');
+  v.setAttribute('data-shorts-video-pool', '1');
+  document.body.appendChild(v);
   v.src = src;
   await new Promise<void>((resolve, reject) => {
     const onReady = () => {
@@ -75,6 +92,22 @@ async function loadVideoElement(src: string): Promise<HTMLVideoElement> {
     v.load();
   });
   return v;
+}
+
+/**
+ * Remove all pooled hidden <video> elements created by `loadVideoElement`.
+ * Call this on project teardown or before a fresh preloadClips to avoid
+ * leaking DOM nodes as the user edits the timeline.
+ */
+export function disposeVideoPool(except?: ReadonlyArray<HTMLVideoElement>): void {
+  const keep = new Set(except ?? []);
+  const nodes = document.querySelectorAll<HTMLVideoElement>('video[data-shorts-video-pool]');
+  nodes.forEach((n) => {
+    if (keep.has(n)) return;
+    try { n.pause(); } catch { /* ignore */ }
+    try { n.removeAttribute('src'); n.load(); } catch { /* ignore */ }
+    n.remove();
+  });
 }
 
 export async function preloadClips(clips: ImageClip[]): Promise<LoadedClip[]> {
@@ -118,6 +151,13 @@ export async function preloadClips(clips: ImageClip[]): Promise<LoadedClip[]> {
   for (const r of results) {
     if (r.status === 'fulfilled') out.push(r.value);
   }
+  // Garbage-collect any pooled hidden <video> elements from previous calls
+  // that aren't part of the new clip set. Without this, every timeline
+  // edit that reruns preloadClips would leak a hidden <video> DOM node.
+  const keep = out
+    .map((c) => c.video)
+    .filter((v): v is HTMLVideoElement => v != null);
+  disposeVideoPool(keep);
   return out;
 }
 
@@ -288,7 +328,7 @@ function identity(): DrawTransform {
 
 /** Tiny PRNG for deterministic-but-varied per-frame jitter. */
 function rng(seed: number): number {
-  let x = (seed * 9301 + 49297) % 233280;
+  const x = (seed * 9301 + 49297) % 233280;
   return x / 233280;
 }
 
@@ -1743,12 +1783,24 @@ export function renderFrame(rc: RenderContext, t: number): void {
    */
   const drawClipImages = (c: LoadedClip, p: number) => {
     const tr = applyEffect(resolveEffect(c), p);
-    // Video-backed clip: draw the live frame from the video element. We
-    // fall back to the poster image when the video isn't ready yet so the
-    // first frame after preload doesn't flash black.
-    if (c.kind === 'video' && c.video && c.video.readyState >= 2) {
-      drawCover(ctx, c.video, W, H, tr);
-      return;
+    // Video-backed clip: draw the live frame from the video element.
+    // We attempt the draw whenever the element exists and has reported
+    // any video dimensions (videoWidth > 0 means metadata is in). The
+    // previous gate on `readyState >= 2` (HAVE_CURRENT_DATA) silently
+    // demoted briefly-stalled video clips to a still poster image
+    // mid-export, which produced the "imported video doesn't show up
+    // in the exported file" bug. drawImage on a HTMLVideoElement
+    // without a current frame is harmless (the canvas just keeps its
+    // previous pixels) so falling through to the poster is the wrong
+    // recovery — it makes the clip flicker between video and image.
+    if (c.kind === 'video' && c.video && c.video.videoWidth > 0) {
+      try {
+        drawCover(ctx, c.video, W, H, tr);
+        return;
+      } catch {
+        // Only fall through to the poster if the browser actually
+        // refused the draw (e.g. video element was disposed).
+      }
     }
     if (c.splitImage && c.splitMode && c.splitMode !== 'none') {
       drawSplitCover(ctx, c.image, c.splitImage, W, H, tr, c.splitMode);

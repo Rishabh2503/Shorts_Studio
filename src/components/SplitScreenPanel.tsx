@@ -14,6 +14,7 @@ import {
 import UploadIcon from '@mui/icons-material/Upload';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import ClearIcon from '@mui/icons-material/Clear';
+import { generateImage } from '../engine/ai';
 import type { ImageClip, SplitMode } from '../types';
 
 interface Props {
@@ -60,10 +61,6 @@ export function SplitScreenPanel({ clip, onChange }: Props) {
     setBusy(true);
     setErr(null);
     try {
-      // Dynamic-import to keep Timeline's bundle slim — the AI engine pulls
-      // in its proxy cascade machinery only when the user actually clicks
-      // Generate.
-      const { generateImage } = await import('../engine/ai');
       const src = await generateImage({ prompt: p });
       onChange({
         splitSrc: src,

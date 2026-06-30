@@ -29,6 +29,9 @@ import LibraryAddCheckRoundedIcon from '@mui/icons-material/LibraryAddCheckRound
 import DesignServicesRoundedIcon from '@mui/icons-material/DesignServicesRounded';
 import SwapVertRoundedIcon from '@mui/icons-material/SwapVertRounded';
 
+const WALKTHROUGH_VIDEO_URL =
+  import.meta.env.VITE_WALKTHROUGH_VIDEO_URL?.trim() || '/walkthrough.mp4';
+
 /**
  * Information architecture for the user-guide page.
  * Each section is its own card so the page reads like a tutorial \u2014
@@ -318,6 +321,62 @@ export function UserGuideDialog({ open, onClose }: UserGuideProps) {
 
       <DialogContent sx={{ p: 0 }}>
         <Container maxWidth="md" sx={{ py: { xs: 2, sm: 3 } }}>
+          {/* Walkthrough video first so new users can learn the full flow fast. */}
+          <Box
+            sx={{
+              mb: 3,
+              p: { xs: 2, sm: 2.5 },
+              borderRadius: 2,
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.06)'
+            }}
+          >
+            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 1 }}>
+              <Box
+                sx={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 2,
+                  background: 'rgba(34,211,238,0.15)',
+                  color: '#22d3ee',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <MovieFilterRoundedIcon />
+              </Box>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                Walkthrough video
+              </Typography>
+            </Stack>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
+              Watch this quick end-to-end demo to learn the full workflow from prompt to export.
+            </Typography>
+
+            <Box
+              sx={{
+                borderRadius: 2,
+                overflow: 'hidden',
+                border: '1px solid rgba(255,255,255,0.1)',
+                background: 'rgba(0,0,0,0.3)'
+              }}
+            >
+              <Box
+                component="video"
+                controls
+                preload="metadata"
+                src={WALKTHROUGH_VIDEO_URL}
+                sx={{ width: '100%', display: 'block', aspectRatio: '16 / 9' }}
+              />
+            </Box>
+
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              Tip: place your recording at public/walkthrough.mp4 or set VITE_WALKTHROUGH_VIDEO_URL.
+            </Typography>
+          </Box>
+
           {/* Section quick-jump chips. Anchors scroll inside the dialog. */}
           <Stack
             direction="row"

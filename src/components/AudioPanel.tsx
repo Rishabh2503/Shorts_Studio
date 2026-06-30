@@ -184,8 +184,8 @@ export function AudioPanel({ audio, onChange, onRestart, role = 'main' }: Props)
                   const arr = v as number[];
                   // Enforce ordering and a minimum 0.5s window so the slider
                   // can't collapse to zero (which would silence playback).
-                  let s = Math.max(0, Math.min(arr[0], dur - 0.5));
-                  let e = Math.max(s + 0.5, Math.min(arr[1], dur));
+                  const s = Math.max(0, Math.min(arr[0], dur - 0.5));
+                  const e = Math.max(s + 0.5, Math.min(arr[1], dur));
                   onChange({ ...audio, start: s, end: e });
                 }}
                 disableSwap

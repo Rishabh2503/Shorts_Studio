@@ -11,6 +11,26 @@ import react from '@vitejs/plugin-react';
 // as same-origin, so the response has implicit CORS approval.
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // The app ships an on-device AI runtime chunk (Transformers + WASM).
+    // Keep third-party modules split by domain so core UI code remains small,
+    // and raise the advisory threshold to avoid noisy warnings for expected
+    // heavyweight AI chunks.
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('@huggingface/transformers') || id.includes('onnxruntime')) {
+            return 'ai-runtime';
+          }
+          if (id.includes('@mui/') || id.includes('@emotion/')) return 'mui';
+          if (id.includes('framer-motion')) return 'motion';
+          return 'vendor';
+        }
+      }
+    }
+  },
   server: {
     port: 5173,
     open: true,
