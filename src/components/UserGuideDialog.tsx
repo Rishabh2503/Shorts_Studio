@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import {
   Box,
   Button,
@@ -268,7 +268,6 @@ interface UserGuideProps {
 
 export function UserGuideDialog({ open, onClose }: UserGuideProps) {
   const walkthroughVideoRef = useRef<HTMLVideoElement | null>(null);
-  const [walkthroughUnavailable, setWalkthroughUnavailable] = useState(false);
 
   function jumpToChapter(atSec: number): void {
     const el = walkthroughVideoRef.current;
@@ -403,7 +402,6 @@ export function UserGuideDialog({ open, onClose }: UserGuideProps) {
                 preload="metadata"
                 src={WALKTHROUGH_VIDEO_URL}
                 poster={WALKTHROUGH_POSTER_URL}
-                onError={() => setWalkthroughUnavailable(true)}
                 sx={{ width: '100%', display: 'block', aspectRatio: '16 / 9' }}
               />
             </Box>
